@@ -1,0 +1,24 @@
+{% load static %}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{% if title %}{{ title }} · {% endif %}KOL Desk</title><link rel="stylesheet" href="{% static 'style.css' %}"><script defer src="{% static 'app.js' %}"></script></head>
+<body>
+{% if user.is_authenticated %}
+<div class="layout">
+<aside class="sidebar" id="sidebar"><a class="brand" href="{% url 'home' %}"><span class="mark">K</span><span>KOL Desk<small>Creator CRM</small></span></a>
+<nav aria-label="Main navigation">
+<a href="{% url 'home' %}">Overview</a><a href="{% url 'creators' %}">Creators</a>
+{% if role == 'Admin' or role == 'Manager' or role == 'KOL Staff' %}<a href="{% url 'outreach' %}">Outreach</a>{% endif %}
+<a href="{% url 'negotiation' %}">Negotiation</a><a href="{% url 'quotes' %}">Quotes</a><a href="{% url 'deals' %}">Deals</a>
+{% if role != 'Read-only' %}<a href="{% url 'payments' %}">Payments</a>{% endif %}
+{% if role == 'Admin' or role == 'Manager' or role == 'KOL Staff' %}<a href="{% url 'attendance' %}">Attendance</a><a href="{% url 'blockers' %}">Blockers</a><a href="{% url 'reports' %}">Reports</a>{% endif %}
+{% if role == 'Admin' or role == 'Manager' %}<hr><a href="{% url 'assignment_requests' %}">Assignment requests</a>{% endif %}
+{% if role == 'Admin' %}<a href="{% url 'imports' %}">Imports</a><a href="{% url 'users' %}">Users</a><a href="{% url 'settings' %}">Settings</a><a href="{% url 'audit_log' %}">Audit history</a>{% endif %}
+</nav>
+<div class="user"><span>{{ user.get_full_name|default:user.username }}</span><small>{{ role }}</small><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="muted">Sign out</button></form></div>
+</aside>
+<main><header class="top"><button type="button" class="outline menu" id="menu" aria-controls="sidebar" aria-expanded="false">Menu</button><span>Bangladesh workspace</span><span class="status-dot">Asia/Dhaka</span></header>
+<div class="content"><h1>{{ title }}</h1>
+{% for m in messages %}<div class="notice {{ m.tags }}" role="status">{{ m }}</div>{% endfor %}
+{% block content %}{% endblock %}
+</div></main></div>
+{% else %}{% block public %}{% endblock %}{% endif %}
+</body></html>

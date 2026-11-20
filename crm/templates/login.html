@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block public %}
+<div class="login-wrap"><div class="login-visual"><div class="brand"><span class="mark">K</span> KOL Desk</div><h1>Creator relationships,<br>in one workspace.</h1><p>Source creators, track outreach, and manage collaborations.</p></div>
+<main class="login-card"><h1>Sign in</h1><p>Access your KOL team workspace.</p>{% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}<form method="post">{% csrf_token %}
+<label>Username<input name="username" autocomplete="username" required autofocus></label>
+<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+<label>Authenticator code<input name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><small>Required for admins, managers, and finance users.</small></label>
+<button>Sign in</button></form></main></div>
+{% endblock %}

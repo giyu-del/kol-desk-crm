@@ -1,0 +1,1 @@
+{% if shift %}<a class="button" href="{% url 'report' shift.pk %}">Review report &amp; clock out</a>{% else %}<form method="post" action="{% url 'clock_in' %}">{% csrf_token %}<button>Clock in</button></form>{% endif %}

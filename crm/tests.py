@@ -1,0 +1,171 @@
+import io
+import uuid
+from unittest.mock import patch
+from decimal import Decimal
+from datetime import datetime
+
+import pyotp
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.urls import reverse
+from openpyxl import Workbook
+
+from .imports import commit_batch, create_preview, reverse_batch
+from .models import Activity, AssignmentRequest, Blocker, Creator, Deal, GroupDelivery, Member, Payment, Profile, Quote, Report, Shift
+from .services import costs, score_rows, social_url
+
+User = get_user_model()
+
+class CRMTests(TestCase):
+    def setUp(self):
+        self.staff = self.user("demo-staff", "KOL Staff")
+        self.other = self.user("other-staff", "KOL Staff")
+        self.manager = self.user("manager", "Manager")
+        self.finance = self.user("finance", "Finance")
+        self.admin = User.objects.create_superuser("admin", password="only-for-tests")
+        self.client.force_login(self.staff)
+
+    def user(self, username, role):
+        user = User.objects.create_user(username, password="only-for-tests")
+        Member.objects.create(user=user, role=role)
+        return user
+
+    def post(self, route, payload=None, *args):
+        return self.client.post(reverse(route, args=args), payload or {}, secure=True)
+
+    def get(self, route, *args):
+        return self.client.get(reverse(route, args=args), secure=True)
+
+    def profile(self, user=None, key="example"):
+        obj = Creator.objects.create(name=key, owner=user or self.staff, added_by=user or self.staff, phone="01712345678")
+        return Profile.objects.create(creator=obj, platform="Facebook", url=f"https://facebook.com/{key}",
+            canonical=f"facebook.com/{key}", views=Decimal(1000), followers=4000, likes=Decimal(40), shares=Decimal(10))
+
+    def test_engagement_and_percentiles(self):
+        p = self.profile()
+        self.assertEqual(p.er_followers, Decimal(".0125"))
+        self.assertEqual(p.er_views, Decimal(".05"))
+        p.views = 0
+        self.assertIsNone(p.er_views)
+        p.likes, p.shares = 0, None
+        self.assertEqual(p.er_followers, 0)
+        p.likes = None
+        self.assertIsNone(p.er_followers)
+        rows = [(1, "Facebook", (100, 50, 10)), (2, "Facebook", (200, 50, 0))]
+        self.assertEqual(score_rows(rows, (45, 35, 20)), {1: Decimal("37.5"), 2: Decimal("62.5")})
+        rows = [(1, "Facebook", (1, 1, 1, 10)), (2, "Facebook", (2, 2, 2, 20))]
+        self.assertEqual(score_rows(rows, (45, 30, 10, 15), (0, 1, 2)), {1: 85, 2: 15})
+        rows = [(1, "Facebook", (1, 1, 1, None)), (2, "Facebook", (2, 2, 2, 1))]
+        self.assertEqual(score_rows(rows, (35, 25, 25, 15), (0,)), {1: Decimal("41.2"), 2: Decimal("57.5")})
+
+    def test_duplicate_link_and_record_access(self):
+        p = self.profile(user=self.other, key="c123")
+        url = "https://www.facebook.com/c123/reels/?fbclid=abc"
+        self.assertEqual(social_url(url)[1], "facebook.com/c123")
+        self.assertEqual(self.get("creator", p.creator_id).status_code, 404)
+        self.assertEqual(self.post("record", {"outcome": "Message Sent"}, p.pk).status_code, 404)
+        self.assertContains(self.post("quick_add", {"url": url}), "Already in CRM")
+        self.post("quick_add", {"url": url, "request_assignment": "yes"})
+        self.assertEqual(Profile.objects.count(), 1)
+        self.assertTrue(AssignmentRequest.objects.filter(staff=self.staff).exists())
+        self.assertEqual(self.get("imports").status_code, 403)
+
+    def test_end_to_end(self):
+        self.assertEqual(self.get("home").status_code, 200)
+        self.post("clock_in")
+        self.post("clock_in")
+        shift = Shift.objects.get(staff=self.staff)
+        self.post("quick_add", {"url": "https://facebook.com/example", "name": "উদাহরণ"})
+        p = Profile.objects.get()
+        self.post("edit_creator", {"name": "উদাহরণ", "phone": "01712345678", "stage": "New"}, p.creator_id)
+        self.post("edit_stats", {"followers": 4000, "views": 1000, "likes": 40, "shares": 10}, p.pk)
+        self.profile(key="peer")
+        self.assertContains(self.get("creator", p.creator_id), "WhatsApp")
+        self.assertContains(self.post("contact", {}, p.pk, "whatsapp"), "Continue outreach")
+        self.assertTrue(Activity.objects.get().click)
+        self.assertEqual(self.get("report", shift.pk).context["report"]["Creators contacted"], 0)
+        self.post("record", {"outcome": "Message Sent", "channel": "WhatsApp"}, p.pk)
+        for _ in range(2):
+            self.post("add_blocker", {"issue": "WhatsApp account restricted", "profile": p.pk})
+        self.assertEqual(Blocker.objects.count(), 1)
+        self.assertContains(self.get("negotiation"), "Ready to offer")
+        self.assertEqual(self.post("add_quote", {"kind": "Creator quote", "amount": "6220", "currency": "BDT", "format": "Reels", "basis": "Package", "reels": 2}, p.pk).status_code, 302)
+        self.post("add_quote", {"kind": "Counteroffer", "amount": "5000", "currency": "BDT", "format": "Reels", "basis": "Package", "reels": 2}, p.pk)
+        q = Quote.objects.get(kind="Creator quote")
+        self.assertEqual(q.unit_rm, 100)
+        self.assertEqual(costs(q), (Decimal(2), Decimal(25), Decimal(100)))
+        self.assertContains(self.get("quotes"), "6,220".replace(",", ""))
+        self.post("add_deal", {}, q.pk)
+        deal = Deal.objects.get()
+        self.assertEqual(self.post("deal_state", {"state": "Confirmed / Upcoming"}, deal.pk).status_code, 403)
+        self.client.force_login(self.manager)
+        self.post("deal_state", {"state": "Confirmed / Upcoming"}, deal.pk)
+        self.client.force_login(self.staff)
+        token = uuid.uuid4()
+        for _ in range(2):
+            self.post("request_payment", {"amount": "2220", "token": token}, deal.pk)
+        pmt = Payment.objects.get()
+        self.assertEqual(self.post("payment_state", {"state": "Approved"}, pmt.pk).status_code, 403)
+        self.client.force_login(self.finance)
+        self.post("payment_state", {"state": "Approved"}, pmt.pk)
+        self.post("payment_state", {"state": "Paid", "reference": "sample", "method": "Bank transfer"}, pmt.pk)
+        self.assertEqual(Deal.objects.get().balance, 4000)
+        self.client.force_login(self.staff)
+        for _ in range(2):
+            self.post("clock_out", {"note": "Private sample note"}, shift.pk)
+        self.assertEqual(Report.objects.count(), 1)
+        self.assertEqual(Report.objects.get().data["Creators contacted"], 1)
+        self.assertContains(self.get("report", shift.pk), "Copy Group Report")
+        self.assertNotIn("Private sample note", self.get("report", shift.pk).context["group"])
+        self.assertEqual(self.client.get(reverse("report", args=[shift.pk]) + "?export=csv", secure=True).status_code, 200)
+
+        pdf = self.client.get(reverse("report", args=[shift.pk]) + "?export=pdf", secure=True)
+        self.assertTrue(pdf.content.startswith(b"%PDF"))
+
+    def test_import_preview_commit_repeat_and_reverse(self):
+        wb = Workbook()
+        sheet = wb.active
+        sheet.title = "Master Database"
+        sheet.append(["Head"])
+        sheet.append([datetime(2026, 11, 20), "demo-staff", "Facebook", "চায়ের গল্প",
+                      "https://facebook.com/profile.php?id=123&fbclid=test", "Food", "Bangladesh", "63%", 22, 11, 1])
+        sheet = wb.create_sheet("Outreach Pipeline")
+        sheet.append(["Header"])
+        sheet.append(["Header"])
+        sheet.append(["চায়ের গল্প", "Facebook", "Food", "demo-staff", "WhatsApp", datetime(2026, 11, 20), "Yes", None, "Confirm",
+                      None, None, None, None, None, None, None, None, "BDT 6,220", "2 Reels"])
+        stream = io.BytesIO()
+        wb.save(stream)
+        content = stream.getvalue()
+        batch = create_preview(content, "test.xlsx", self.admin)
+        self.assertEqual(Creator.objects.count(), 0)
+        commit_batch(batch, self.admin)
+        commit_batch(create_preview(content, "repeat.xlsx", self.admin), self.admin)
+        self.assertEqual((Profile.objects.count(), Quote.objects.count(), Deal.objects.count()), (1, 1, 1))
+        self.assertEqual(Profile.objects.get().bd_audience, Decimal(".63"))
+        self.assertEqual(Quote.objects.get().unit_rm, 100)
+        reverse_batch(batch, self.admin)
+        self.assertEqual((Profile.objects.count(), Quote.objects.count(), Deal.objects.count()), (0, 0, 0))
+        self.assertEqual(batch.rows.count(), 2)
+
+    def test_privileged_login_requires_mfa(self):
+        self.client.logout()
+        member = Member.objects.create(user=self.admin, otp_secret=pyotp.random_base32())
+        self.assertEqual(self.post("login", {"username": "admin", "password": "only-for-tests"}).status_code, 200)
+        code = pyotp.TOTP(member.otp_secret).now()
+        self.assertEqual(self.post("login", {"username": "admin", "password": "only-for-tests", "otp": code}).status_code, 302)
+        self.client.logout()
+        self.assertEqual(self.post("login", {"username": "admin", "password": "only-for-tests", "otp": code}).status_code, 200)
+
+    @patch("crm.group_delivery.destination", return_value=("dummy-token", "dummy-group"))
+    @patch("crm.group_delivery.deliver", return_value=("Sent", "42"))
+    def test_group_send_requires_confirmation_and_is_idempotent(self, deliver, destination):
+        self.post("clock_in")
+        shift = Shift.objects.get(staff=self.staff)
+        self.post("clock_out", {"note": "Sensitive private note"}, shift.pk)
+        self.assertEqual(self.post("send_report", {}, shift.pk).status_code, 403)
+        self.post("send_report", {"confirm": "yes"}, shift.pk)
+        self.post("send_report", {"confirm": "yes"}, shift.pk)
+        self.assertEqual(GroupDelivery.objects.get().state, "Sent")
+        self.assertEqual(deliver.call_count, 1)
+        self.assertNotIn("Sensitive private note", deliver.call_args.args[0])
