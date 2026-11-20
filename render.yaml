@@ -2,10 +2,12 @@ services:
   - type: web
     name: kol-desk-crm
     runtime: python
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
-    preDeployCommand: python manage.py migrate --noinput
-    startCommand: gunicorn crm.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 180
+    startCommand: >-
+      python manage.py migrate --noinput &&
+      python manage.py shell -c 'import os, pyotp; from django.contrib.auth import get_user_model; from django.db import transaction; from crm.models import Member; U = get_user_model(); password = os.getenv("CRM_ADMIN_PASSWORD"); secret = os.getenv("CRM_ADMIN_TOTP_SECRET"); code = pyotp.TOTP(secret).now() if secret else None; exec("with transaction.atomic():\n if password and code and not U.objects.filter(is_superuser=True).exists():\n  user = U.objects.create_superuser(username=\"admin\", password=password)\n  Member.objects.create(user=user, otp_secret=secret)")' &&
+      gunicorn crm.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --timeout 180
     healthCheckPath: /health
     envVars:
       - key: SECRET_KEY
@@ -16,9 +18,14 @@ services:
           property: connectionString
       - key: PYTHON_VERSION
         value: 3.12.12
+      - key: CRM_ADMIN_PASSWORD
+        sync: false
+      - key: CRM_ADMIN_TOTP_SECRET
+        sync: false
+
 databases:
   - name: kol-desk-db
-    plan: 0.1c-256mb
+    plan: free
     databaseName: kol_desk
     user: kol_desk
     ipAllowList: []
