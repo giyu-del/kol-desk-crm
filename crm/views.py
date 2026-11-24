@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import json
 import uuid
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote as encode
@@ -143,12 +144,28 @@ def creators(request):
     if sort not in ("name", "-name", "stage", "-stage", "-updated", "niche"):
         sort = "-updated"
     rows = Paginator(query.distinct().order_by(sort, "pk"), 40).get_page(request.GET.get("page"))
-    return page(request, "Creators", creators=rows, creator_page=True)
+    return page(request, "Creators", creators=rows, creator_page=True,
+                capture_bookmarklet=capture_bookmarklet(request))
+
+def capture_bookmarklet(request):
+    """Bookmarklet that opens quick-add with the current page's URL and title.
+
+    Runs on the creator's profile page, so it only reads the address and the
+    page title — no scraping and no extra login. The name is a guess from the
+    title; the user can correct it on the pre-filled form before saving.
+    """
+    target = request.build_absolute_uri(reverse("quick_add"))
+    return ("javascript:(function(){var u=location.href;"
+            "var n=document.title.split(' | ')[0].split(' \u2022 ')[0].split(' - ')[0].trim();"
+            "window.open(" + json.dumps(target) + "+'?url='+encodeURIComponent(u)+'&name='+encodeURIComponent(n),'_blank');})();")
 
 @login_required
-@require_POST
 def quick_add(request):
     allowed(request, EDIT)
+    if request.method == "GET":
+        return page(request, "Save creator link", capture_form=True,
+                    quick_url=request.GET.get("url", "").strip()[:2500],
+                    quick_name=request.GET.get("name", "").strip()[:240])
     try:
         platform, canonical, reference, url = social_url(request.POST.get("url", "").strip())
         name = request.POST.get("name", "").strip()

@@ -3,6 +3,7 @@ import uuid
 from unittest.mock import patch
 from decimal import Decimal
 from datetime import date, datetime, timedelta
+from urllib.parse import urlencode
 
 import pyotp
 from django.contrib.auth import get_user_model
@@ -279,6 +280,25 @@ class CRMTests(TestCase):
         before = Activity.objects.filter(outcome="Follow-up Needed", channel="System").count()
         self.post("deal_state", {"state": "Completed"}, deal.pk)
         self.assertEqual(Activity.objects.filter(outcome="Follow-up Needed", channel="System").count(), before)
+
+    def test_capture_prefills_and_saves(self):
+        query = urlencode({"url": "https://facebook.com/example", "name": "Test Creator"})
+        response = self.client.get(reverse("quick_add") + "?" + query, secure=True)
+        self.assertContains(response, 'value="https://facebook.com/example"')
+        self.assertContains(response, 'value="Test Creator"')
+        self.assertEqual(self.get("quick_add").status_code, 200)
+        self.post("quick_add", {"url": "https://facebook.com/example", "name": "Test Creator"})
+        creator = Creator.objects.get(name="Test Creator")
+        self.assertEqual(creator.profiles.get().platform, "Facebook")
+        # The same profile again (even with a tracking parameter) stays one creator.
+        self.post("quick_add", {"url": "https://facebook.com/example?fbclid=abc", "name": "Test Creator"})
+        self.assertEqual(Creator.objects.filter(name="Test Creator").count(), 1)
+
+    def test_creators_page_has_capture_bookmarklet(self):
+        response = self.get("creators")
+        self.assertContains(response, "Save to KOL Desk")
+        self.assertContains(response, "javascript:(function(){var u=location.href;")
+        self.assertContains(response, "creators/save/")
 
     def test_import_preview_commit_repeat_and_reverse(self):
         wb = Workbook()
