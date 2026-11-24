@@ -275,7 +275,40 @@ def finish_followup(request, pk):
     activity = get_object_or_404(Activity, pk=pk, profile__in=profiles_for(request))
     activity.done = True
     activity.save(update_fields=["done"])
+    if request.POST.get("next") == "my_followups":
+        return redirect("my_followups")
     return redirect("outreach")
+
+@login_required
+def my_followups(request):
+    allowed(request, EDIT)
+    items = Activity.objects.filter(profile__in=profiles_for(request), done=False, followup__isnull=False).select_related("profile__creator", "actor").order_by("followup")
+    if role(request.user) not in MANAGE:
+        items = items.filter(actor=request.user)
+    if role(request.user) in MANAGE and request.GET.get("staff"):
+        items = items.filter(actor__username__iexact=request.GET["staff"])
+    now = timezone.now()
+    today = timezone.localdate()
+    overdue, due_today, upcoming = [], [], []
+    for item in items:
+        if item.followup <= now:
+            overdue.append(item)
+        elif timezone.localtime(item.followup).date() == today:
+            due_today.append(item)
+        else:
+            upcoming.append(item)
+    return page(request, "My follow-ups", my_followups=True, is_manager=role(request.user) in MANAGE,
+                queue_groups=[("Overdue", overdue), ("Due today", due_today), ("Upcoming", upcoming)])
+
+@login_required
+@require_POST
+def snooze_followup(request, pk):
+    allowed(request, EDIT)
+    activity = get_object_or_404(Activity, pk=pk, profile__in=profiles_for(request))
+    if activity.followup and not activity.done:
+        activity.followup = activity.followup + timedelta(days=1)
+        activity.save(update_fields=["followup"])
+    return redirect("my_followups")
 
 @login_required
 def outreach(request):

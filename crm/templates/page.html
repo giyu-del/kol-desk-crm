@@ -10,12 +10,17 @@
 {% endif %}
 {% if dashboard %}
 <div class="metrics">{% for label,value in stats %}<article class="metric"><span>{{ label }}</span><strong>{{ value }}</strong></article>{% endfor %}</div>
-<div class="split"><section class="card"><h2>Follow-ups due</h2>{% for item in followups %}<div class="list-line"><a href="{% url 'creator' item.profile.creator_id %}">{{ item.profile.creator }}</a><span>{{ item.followup|date:"d M, H:i" }}</span></div>{% empty %}<p>No overdue follow-ups.</p>{% endfor %}</section>
+<div class="split"><section class="card"><h2>Follow-ups due</h2>{% for item in followups %}<div class="list-line"><a href="{% url 'creator' item.profile.creator_id %}">{{ item.profile.creator }}</a><span>{{ item.followup|date:"d M, H:i" }}</span></div>{% empty %}<p>No overdue follow-ups.</p>{% endfor %}<a href="{% url 'my_followups' %}">See all follow-ups</a></section>
 <section class="card"><h2>Recently updated creators</h2>{% for item in recent %}<div class="list-line"><a href="{% url 'creator' item.pk %}">{{ item }}</a><span class="chip">{{ item.stage }}</span></div>{% empty %}<p>Save your first creator link to get started.</p>{% endfor %}</section></div>
 <div class="split"><section class="card"><h2>Recent replies</h2>{% for item in new_replies %}<div class="list-line"><a href="{% url 'creator' item.profile.creator_id %}">{{ item.profile.creator }}</a><span>{{ item.created|date:"d M, H:i" }}</span></div>{% empty %}<p>No replies logged yet.</p>{% endfor %}</section>
 <section class="card"><h2>Quotes to review</h2>{% for q in quotes_to_review %}<div class="list-line"><a href="{% url 'creator' q.profile.creator_id %}">{{ q.profile.creator }}</a><span>{{ q.currency }} {{ q.amount }}</span></div>{% empty %}<p>No open quotes.</p>{% endfor %}</section></div>
 {% if role != 'Finance' and role != 'Read-only' %}<div class="split"><section class="card"><h2>Open blockers</h2>{% for item in open_blockers %}<div class="list-line"><a href="{% url 'blockers' %}#blocker-{{ item.pk }}">{{ item.issue }}</a><span class="chip">{{ item.state }}</span></div>{% empty %}<p>No open blockers.</p>{% endfor %}</section>
 {% if can_manage %}<section class="card"><h2>Team working now</h2>{% for item in working %}<div class="list-line">{{ item.staff }} <span class="chip">Since {{ item.start|date:"H:i" }}</span></div>{% empty %}<p>No active clock-ins.</p>{% endfor %}<h2>Upcoming shifts</h2>{% for item in upcoming %}<div class="list-line">{{ item.staff }} <span>{{ item.date }}</span></div>{% empty %}<p>No upcoming shifts.</p>{% endfor %}<a href="{% url 'attendance' %}">Open attendance</a></section>{% endif %}</div>{% endif %}
+{% endif %}
+
+{% if my_followups %}
+{% if is_manager %}<form class="filters"><input name="staff" placeholder="Staff username" value="{{ request.GET.staff }}" aria-label="Staff username"><button>Apply</button></form>{% endif %}
+{% for heading, items in queue_groups %}<section class="card"><h2>{{ heading }}</h2>{% for item in items %}<div class="list-line"><span><a href="{% url 'creator' item.profile.creator_id %}">{{ item.profile.creator }}</a> · {{ item.channel }} · {{ item.outcome }}<small>{{ item.actor|default_if_none:"Imported" }} · {{ item.followup|date:"d M Y, H:i" }}{% if item.notes %} · {{ item.notes }}{% endif %}</small></span><form method="post" action="{% url 'finish_followup' item.pk %}">{% csrf_token %}<input type="hidden" name="next" value="my_followups"><button class="outline">Mark done</button></form><form method="post" action="{% url 'snooze_followup' item.pk %}">{% csrf_token %}<button class="outline">Snooze to tomorrow</button></form></div>{% empty %}<p>No follow-ups {{ heading|lower }}.</p>{% endfor %}</section>{% endfor %}
 {% endif %}
 
 {% if creator_page %}

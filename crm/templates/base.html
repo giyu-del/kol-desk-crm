@@ -6,7 +6,7 @@
 <aside class="sidebar" id="sidebar"><a class="brand" href="{% url 'home' %}"><span class="mark">K</span><span>KOL Desk<small>Creator CRM</small></span></a>
 <nav aria-label="Main navigation">
 <a href="{% url 'home' %}">Overview</a><a href="{% url 'creators' %}">Creators</a>
-{% if role == 'Admin' or role == 'Manager' or role == 'KOL Staff' %}<a href="{% url 'outreach' %}">Outreach</a>{% endif %}
+{% if role == 'Admin' or role == 'Manager' or role == 'KOL Staff' %}<a href="{% url 'outreach' %}">Outreach</a><a href="{% url 'my_followups' %}">My follow-ups</a>{% endif %}
 <a href="{% url 'negotiation' %}">Negotiation</a><a href="{% url 'quotes' %}">Quotes</a><a href="{% url 'deals' %}">Deals</a>
 {% if role != 'Read-only' %}<a href="{% url 'payments' %}">Payments</a>{% endif %}
 {% if role == 'Admin' or role == 'Manager' or role == 'KOL Staff' %}<a href="{% url 'attendance' %}">Attendance</a><a href="{% url 'blockers' %}">Blockers</a><a href="{% url 'reports' %}">Reports</a>{% endif %}
