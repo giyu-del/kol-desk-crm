@@ -12,7 +12,7 @@ from openpyxl import Workbook
 
 from .imports import commit_batch, create_preview, reverse_batch
 from .models import Activity, AssignmentRequest, Blocker, Creator, Deal, GroupDelivery, Member, Payment, Profile, Quote, Report, Shift
-from .services import costs, score_rows, social_url
+from .services import costs, costs_bdt, score_rows, social_url
 
 User = get_user_model()
 
@@ -57,6 +57,39 @@ class CRMTests(TestCase):
         self.assertEqual(score_rows(rows, (45, 30, 10, 15), (0, 1, 2)), {1: 85, 2: 15})
         rows = [(1, "Facebook", (1, 1, 1, None)), (2, "Facebook", (2, 2, 2, 1))]
         self.assertEqual(score_rows(rows, (35, 25, 25, 15), (0,)), {1: Decimal("41.2"), 2: Decimal("57.5")})
+
+    def test_bdt_rate_columns(self):
+        p = self.profile()
+        q = Quote.objects.create(profile=p, actor=self.staff, kind="Creator quote",
+                                 amount=Decimal("6220"), currency="BDT",
+                                 format="Reels", basis="Package", reels=2)
+        # Same fixture as the end-to-end test: 6220 BDT / 2 reels = 3110 BDT per reel.
+        self.assertEqual(q.unit_bdt, Decimal("3110"))
+        self.assertEqual(q.unit_rm, 100)
+        self.assertEqual(costs(q), (Decimal(2), Decimal(25), Decimal(100)))
+        self.assertEqual(costs_bdt(q), (Decimal("62.2"), Decimal("777.5"), Decimal("3110")))
+        # Fallback: a clear Per Reel basis derives a per-Reel price even
+        # when the format is not Reels.
+        mixed = Quote.objects.create(profile=p, actor=self.staff, kind="Creator quote",
+                                     amount=Decimal("5000"), currency="BDT",
+                                     format="Mixed", basis="Per Reel")
+        self.assertEqual(mixed.unit_bdt, Decimal("5000"))
+        self.assertIsNotNone(mixed.unit_rm)
+        # An RM quote converts to BDT with the quote's fx rate.
+        rm = Quote.objects.create(profile=p, actor=self.staff, kind="Creator quote",
+                                  amount=Decimal("100"), currency="RM",
+                                  format="Reels", basis="Per Reel")
+        self.assertEqual(rm.unit_bdt, Decimal("3110"))
+        # No clear basis means no per-unit price, in either currency.
+        unclear = Quote.objects.create(profile=p, actor=self.staff, kind="Creator quote",
+                                       amount=Decimal("9000"), currency="BDT",
+                                       format="Reels", basis="Unclear")
+        self.assertIsNone(unclear.unit_bdt)
+        self.assertEqual(costs_bdt(unclear), (None, None, None))
+        # The comparison page shows the new BDT columns and values.
+        page = self.get("quotes")
+        self.assertContains(page, "Cost / engagement (BDT)")
+        self.assertContains(page, "3110")
 
     def test_duplicate_link_and_record_access(self):
         p = self.profile(user=self.other, key="c123")

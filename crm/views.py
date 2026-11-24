@@ -24,7 +24,7 @@ from django import forms
 from .forms import CreatorForm, DealForm, PaymentForm, QuoteForm, ScheduleForm, StatsForm
 from .models import (Activity, AssignmentRequest, Audit, BLOCKERS, Blocker, Config, Creator,
                      Deal, GroupDelivery, LoginThrottle, Member, OUTCOMES, Payment, Profile, Quote, Report, Schedule, Shift)
-from .services import (COMPLETED_CONTACTS, REPLIES, audit, band, costs, creators_for,
+from .services import (COMPLETED_CONTACTS, REPLIES, audit, band, costs, costs_bdt, creators_for,
                        group_report, phone_number, report_data, role, score_rows, social_url)
 
 User = get_user_model()
@@ -325,9 +325,10 @@ def negotiation(request):
 def quotes(request):
     all_quotes = list(Quote.objects.filter(kind="Creator quote").select_related("profile__creator"))
     quote_costs = {q.pk: costs(q) for q in all_quotes}
+    quote_costs_bdt = {q.pk: costs_bdt(q) for q in all_quotes}
     scores = score_rows(((q.pk, q.profile.platform, (quote_costs[q.pk][2], quote_costs[q.pk][0], quote_costs[q.pk][1], q.profile.views)) for q in all_quotes), (45, 30, 10, 15), (0, 1, 2))
     visible = set(profiles_for(request).values_list("pk", flat=True))
-    rows = [(q, scores.get(q.pk), quote_costs[q.pk]) for q in all_quotes if q.profile_id in visible and request.GET.get("platform", "").casefold() in q.profile.platform.casefold()]
+    rows = [(q, scores.get(q.pk), quote_costs[q.pk], quote_costs_bdt[q.pk]) for q in all_quotes if q.profile_id in visible and request.GET.get("platform", "").casefold() in q.profile.platform.casefold()]
     rows.sort(key=lambda r: (r[1] is None, -(r[1] or 0), r[0].bdt, r[0].pk))
     return page(request, "Rate card comparison", quotes=Paginator(rows, 50).get_page(request.GET.get("page")))
 

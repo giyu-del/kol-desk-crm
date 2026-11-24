@@ -125,17 +125,34 @@ class Quote(models.Model):
     def bdt(self):
         return self.amount if self.currency == "BDT" else self.amount * self.fx
 
-    @property
-    def unit_rm(self):
+    def _unit(self):
+        """Per-Reel price in the quote's own currency, or None.
+
+        Uses the verified per-Reel price when set, otherwise derives it
+        from a clear basis: "Per Reel" means the amount already is the
+        per-Reel price, and "Package" with a reel count divides the
+        amount by the reels. Any other basis (Recurring, Unclear) has
+        no per-Reel price, so this returns None.
+        """
         unit = self.verified_unit
-        if unit is None and self.format == "Reels":
+        if unit is None:
             if self.basis == "Per Reel":
                 unit = self.amount
             elif self.basis == "Package" and self.reels:
                 unit = self.amount / self.reels
         if unit is None or unit <= 0:
             return None
-        return unit if self.currency == "RM" else unit / self.fx
+        return unit
+
+    @property
+    def unit_rm(self):
+        unit = self._unit()
+        return None if unit is None else (unit if self.currency == "RM" else unit / self.fx)
+
+    @property
+    def unit_bdt(self):
+        unit = self._unit()
+        return None if unit is None else (unit if self.currency == "BDT" else unit * self.fx)
 
     def __str__(self):
         return f"{self.profile} · {self.currency} {self.amount} · {self.kind}"
