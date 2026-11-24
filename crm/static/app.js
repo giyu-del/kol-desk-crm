@@ -14,6 +14,28 @@ document.querySelectorAll("[data-drawer]").forEach(link => link.addEventListener
 }));
 drawer?.addEventListener("close", () => drawer.querySelector("iframe").removeAttribute("src"));
 
+const preview = document.querySelector("#post-preview");
+document.querySelectorAll("[data-post-preview]").forEach(button => button.addEventListener("click", () => {
+  if (!preview || !preview.showModal) return;
+  const url = button.dataset.url;
+  const frame = preview.querySelector("iframe");
+  const img = preview.querySelector("img");
+  preview.querySelector("#post-preview-title").textContent = button.dataset.title || "Post";
+  preview.querySelector("#open-original").href = url;
+  if (/\.(jpg|jpeg|png|webp|gif)(\?|#|$)/i.test(url)) {
+    img.src = url; img.hidden = false;
+    frame.hidden = true; frame.removeAttribute("src");
+  } else {
+    frame.src = url; frame.hidden = false;
+    img.hidden = true; img.removeAttribute("src");
+  }
+  preview.showModal();
+}));
+preview?.addEventListener("close", () => {
+  preview.querySelector("iframe").removeAttribute("src");
+  preview.querySelector("img").removeAttribute("src");
+});
+
 document.querySelectorAll("[data-copy]").forEach(button => button.addEventListener("click", async () => {
   const source = document.getElementById(button.dataset.copy);
   try {

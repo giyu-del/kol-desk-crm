@@ -78,6 +78,36 @@ class Profile(models.Model):
     def __str__(self):
         return f"{self.creator} · {self.platform}"
 
+class Post(models.Model):
+    """A tracked post (reel or photo) on one of a creator's profiles.
+
+    This is the record the "Top 5 Creators" dashboard ranks. Metrics are
+    per post and recorded by staff; a missing metric is not zero — a reel
+    without views cannot rank, and a photo with any of reactions, comments
+    or shares missing is excluded until the metrics are complete.
+    Portfolio-only posts are shown in the creator's gallery but never rank.
+    """
+    profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name="posts")
+    post_type = models.CharField(max_length=10, choices=options(["Reel", "Photo"]), default="Reel")
+    url = models.URLField(max_length=2500)
+    published_at = models.DateField()
+    views = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    reactions = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    comments = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    shares = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    portfolio_only = models.BooleanField(default=False)
+    created_by = models.ForeignKey(U, null=True, on_delete=models.PROTECT)
+    created = models.DateTimeField(default=timezone.now)
+    updated = models.DateTimeField(auto_now=True)
+
+    @property
+    def interactions(self):
+        values = [self.reactions, self.comments, self.shares]
+        return sum(values, Decimal(0)) if all(v is not None for v in values) else None
+
+    def __str__(self):
+        return f"{self.profile.creator} · {self.profile.platform} · {self.post_type}"
+
 class Shift(models.Model):
     staff = models.ForeignKey(U, on_delete=models.PROTECT)
     start = models.DateTimeField(default=timezone.now)

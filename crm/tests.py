@@ -13,8 +13,8 @@ from django.utils import timezone
 from openpyxl import Workbook
 
 from .imports import commit_batch, create_preview, reverse_batch
-from .models import Activity, AssignmentRequest, Blocker, Campaign, Creator, Deal, GroupDelivery, Member, Payment, Profile, Quote, Report, Shift
-from .services import audience_check, costs, costs_bdt, score_rows, social_url
+from .models import Activity, AssignmentRequest, Blocker, Campaign, Creator, Deal, GroupDelivery, Member, Payment, Post, Profile, Quote, Report, Shift
+from .services import audience_check, costs, costs_bdt, score_rows, social_url, top_posts
 
 User = get_user_model()
 
@@ -267,6 +267,97 @@ class CRMTests(TestCase):
         withdrawn = Deal.objects.get()
         self.assertFalse(withdrawn.content_confirmed)
         self.assertEqual(withdrawn.post_url, "https://facebook.com/example/post")
+
+    def test_top5_reels_picks_best_post_per_creator(self):
+        today = timezone.localdate()
+        p = self.profile()
+        p2 = self.profile(key="second")
+        p3 = self.profile(key="third")
+        Post.objects.create(profile=p, post_type="Reel", url="https://facebook.com/example/reel-a",
+                            published_at=today - timedelta(days=2), views=Decimal(5000))
+        winner = Post.objects.create(profile=p, post_type="Reel", url="https://facebook.com/example/reel-b",
+                                     published_at=today - timedelta(days=1), views=Decimal(9000))
+        second = Post.objects.create(profile=p2, post_type="Reel", url="https://facebook.com/second/reel",
+                                     published_at=today - timedelta(days=3), views=Decimal(7000))
+        Post.objects.create(profile=p3, post_type="Reel", url="https://facebook.com/third/reel",
+                            published_at=today - timedelta(days=1), views=Decimal(0))
+        # Excluded: no views (missing is not zero), too old, portfolio-only.
+        Post.objects.create(profile=p2, post_type="Reel", url="https://facebook.com/second/reel-nometrics",
+                            published_at=today - timedelta(days=1))
+        Post.objects.create(profile=p2, post_type="Reel", url="https://facebook.com/second/reel-old",
+                            published_at=today - timedelta(days=8), views=Decimal(99999))
+        Post.objects.create(profile=p2, post_type="Reel", url="https://facebook.com/second/reel-portfolio",
+                            published_at=today - timedelta(days=1), views=Decimal(99999), portfolio_only=True)
+        ranked = top_posts(self.staff, "reels", "")
+        self.assertEqual([(post.pk, metric) for post, metric in ranked],
+                         [(winner.pk, Decimal(9000)), (second.pk, Decimal(7000)),
+                          (Post.objects.get(url="https://facebook.com/third/reel").pk, Decimal(0))])
+        response = self.get("home")
+        self.assertContains(response, "Top 5 Creators")
+        self.assertContains(response, "9000 views")
+        self.assertContains(response, "data-post-preview")
+
+    def test_top5_photos_requires_complete_metrics(self):
+        today = timezone.localdate()
+        p = self.profile()
+        p2 = self.profile(key="second")
+        Post.objects.create(profile=p, post_type="Photo", url="https://facebook.com/example/photo-a",
+                            published_at=today - timedelta(days=1), comments=Decimal(500), shares=Decimal(500))
+        complete = Post.objects.create(profile=p, post_type="Photo", url="https://facebook.com/example/photo-b",
+                                       published_at=today - timedelta(days=2), reactions=Decimal(100),
+                                       comments=Decimal(50), shares=Decimal(25))
+        other = Post.objects.create(profile=p2, post_type="Photo", url="https://facebook.com/second/photo",
+                                    published_at=today - timedelta(days=1), reactions=Decimal(10),
+                                    comments=Decimal(10), shares=Decimal(10))
+        ranked = top_posts(self.staff, "photos", "")
+        self.assertEqual([(post.pk, metric) for post, metric in ranked],
+                         [(complete.pk, Decimal(175)), (other.pk, Decimal(30))])
+        response = self.client.get(reverse("home") + "?top_tab=photos", secure=True)
+        self.assertContains(response, "175 interactions")
+        self.assertContains(response, "All platforms")
+
+    def test_top5_tie_breaks_and_platform_filter(self):
+        today = timezone.localdate()
+        p = self.profile()
+        p2 = self.profile(key="second")
+        p3 = self.profile(key="third")
+        older = Post.objects.create(profile=p, post_type="Reel", url="https://facebook.com/example/r1",
+                                    published_at=today - timedelta(days=3), views=Decimal(1000))
+        newer = Post.objects.create(profile=p2, post_type="Reel", url="https://facebook.com/second/r1",
+                                    published_at=today - timedelta(days=1), views=Decimal(1000))
+        self.assertEqual([post.pk for post, _ in top_posts(self.staff, "reels", "")], [newer.pk, older.pk])
+        tied = Post.objects.create(profile=p3, post_type="Reel", url="https://facebook.com/third/r1",
+                                   published_at=today - timedelta(days=1), views=Decimal(1000))
+        self.assertEqual([post.pk for post, _ in top_posts(self.staff, "reels", "")], [tied.pk, newer.pk, older.pk])
+        tiktok = Profile.objects.create(creator=p3.creator, platform="TikTok", url="https://tiktok.com/third",
+                                        canonical="tiktok.com/third")
+        big = Post.objects.create(profile=tiktok, post_type="Reel", url="https://tiktok.com/third/r1",
+                                  published_at=today - timedelta(days=1), views=Decimal(5000))
+        self.assertEqual(top_posts(self.staff, "reels", "")[0][0].pk, big.pk)
+        self.assertEqual([post.pk for post, _ in top_posts(self.staff, "reels", "Facebook")],
+                         [tied.pk, newer.pk, older.pk])
+
+    def test_top5_window_and_permissions(self):
+        today = timezone.localdate()
+        p = self.profile()
+        edge = Post.objects.create(profile=p, post_type="Reel", url="https://facebook.com/example/edge",
+                                   published_at=today - timedelta(days=7), views=Decimal(100))
+        Post.objects.create(profile=p, post_type="Reel", url="https://facebook.com/example/old",
+                            published_at=today - timedelta(days=8), views=Decimal(9999))
+        self.assertEqual([post.pk for post, _ in top_posts(self.staff, "reels", "")], [edge.pk])
+        self.assertEqual(top_posts(self.user("other", "KOL Staff"), "reels", ""), [])
+        self.assertEqual([post.pk for post, _ in top_posts(self.manager, "reels", "")], [edge.pk])
+
+    def test_add_post_and_gallery(self):
+        p = self.profile()
+        self.post("add_post", {"post_type": "Photo", "url": "https://facebook.com/example/photo",
+                               "published_at": "2026-11-24", "reactions": "10", "comments": "5",
+                               "shares": "2", "portfolio_only": "on"}, p.pk)
+        post = Post.objects.get()
+        self.assertEqual(post.interactions, Decimal(17))
+        page = self.get("creator", p.creator_id)
+        self.assertContains(page, "Tracked posts")
+        self.assertContains(page, "Portfolio only")
 
     def test_campaigns_budget_rollup(self):
         self.client.force_login(self.finance)

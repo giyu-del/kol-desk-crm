@@ -1,6 +1,6 @@
 from decimal import Decimal
 from django import forms
-from .models import Activity, Campaign, Creator, Deal, Payment, Profile, Quote, Schedule
+from .models import Activity, Campaign, Creator, Deal, Payment, Post, Profile, Quote, Schedule
 
 class CreatorForm(forms.ModelForm):
     class Meta:
@@ -45,6 +45,12 @@ class QuoteForm(forms.ModelForm):
             if data.get(key) is not None and data[key] <= 0:
                 self.add_error(key, "Enter a positive amount.")
         return data
+
+class PostForm(forms.ModelForm):
+    class Meta:
+        model = Post
+        fields = ["post_type", "url", "published_at", "views", "reactions", "comments", "shares", "portfolio_only"]
+        widgets = {"published_at": forms.DateInput(attrs={"type": "date"})}
 
 class CampaignForm(forms.ModelForm):
     class Meta:
