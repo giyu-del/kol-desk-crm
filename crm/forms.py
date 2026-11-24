@@ -46,11 +46,35 @@ class QuoteForm(forms.ModelForm):
                 self.add_error(key, "Enter a positive amount.")
         return data
 
+MEDIA_TYPES = {
+    "Reel": {"video/mp4", "video/quicktime", "video/webm"},
+    "Photo": {"image/jpeg", "image/png", "image/webp", "image/gif"},
+}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
 class PostForm(forms.ModelForm):
+    media_file = forms.FileField(required=False, label="Upload reel or photo file")
+    remove_media = forms.BooleanField(required=False, label="Remove the uploaded file")
+
     class Meta:
         model = Post
         fields = ["post_type", "url", "published_at", "views", "reactions", "comments", "shares", "portfolio_only"]
         widgets = {"published_at": forms.DateInput(attrs={"type": "date"})}
+
+    def clean_media_file(self):
+        uploaded = self.cleaned_data.get("media_file")
+        if uploaded and uploaded.size > MAX_UPLOAD_BYTES:
+            raise forms.ValidationError("File is too big — keep it under 25 MB.")
+        return uploaded
+
+    def clean(self):
+        cleaned = super().clean()
+        uploaded = cleaned.get("media_file")
+        post_type = cleaned.get("post_type")
+        if uploaded and post_type and uploaded.content_type not in MEDIA_TYPES.get(post_type, set()):
+            kind = "a video (MP4, MOV or WebM)" if post_type == "Reel" else "an image (JPG, PNG, WebP or GIF)"
+            self.add_error("media_file", f"Upload {kind} for a {post_type.lower()}.")
+        return cleaned
 
 class CampaignForm(forms.ModelForm):
     class Meta:

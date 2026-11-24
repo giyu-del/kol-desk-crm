@@ -16,6 +16,7 @@ urlpatterns = [
     path("profiles/<int:pk>/record/", views.record, name="record"),
     path("profiles/<int:pk>/post/", views.add_post, name="add_post"),
     path("posts/<int:pk>/edit/", views.edit_post, name="edit_post"),
+    path("posts/<int:pk>/media/", views.post_media, name="post_media"),
     path("profiles/<int:pk>/quote/", views.add_quote, name="add_quote"),
     path("outreach/", views.outreach, name="outreach"),
     path("outreach/<int:pk>/done/", views.finish_followup, name="finish_followup"),
