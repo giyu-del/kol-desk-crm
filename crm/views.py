@@ -22,12 +22,12 @@ from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
 from django import forms
 
-from .forms import CampaignForm, ContentForm, CreatorForm, DealForm, PaymentForm, QuoteForm, ScheduleForm, StatsForm
+from .forms import CampaignForm, ContentForm, CreatorForm, DealForm, PaymentForm, PostForm, QuoteForm, ScheduleForm, StatsForm
 from .models import (Activity, AssignmentRequest, Audit, BLOCKERS, Blocker, Campaign, Config, Creator,
-                     Deal, GroupDelivery, LoginThrottle, Member, OUTCOMES, Payment, Profile, Quote, Report, Schedule, Shift)
+                     Deal, GroupDelivery, LoginThrottle, Member, OUTCOMES, Payment, Post, Profile, Quote, Report, Schedule, Shift)
 from .services import (COMPLETED_CONTACTS, REPLIES, audit, audience_check, band, costs, costs_bdt,
                        creators_for, group_report, phone_number, publish_due, report_data, role,
-                       schedule_stage_followup, score_rows, social_url)
+                       schedule_stage_followup, score_rows, social_url, top_posts)
 
 User = get_user_model()
 MANAGE = ("Admin", "Manager")
@@ -120,10 +120,16 @@ def home(request):
     managers = role(request.user) in MANAGE
     working = list(Shift.objects.filter(end__isnull=True, staff__member__role="KOL Staff").select_related("staff")) if managers else []
     upcoming = Schedule.objects.filter(date__gte=today).select_related("staff").order_by("date")[:8] if managers else None
+    top_tab = request.GET.get("top_tab", "reels")
+    if top_tab not in ("reels", "photos"):
+        top_tab = "reels"
+    top_platform = request.GET.get("top_platform", "")
+    top_platforms = sorted(Profile.objects.filter(creator__in=creators).values_list("platform", flat=True).distinct())
     return page(request, "Overview", dashboard=True, working=working, upcoming=upcoming, open_blockers=blockers.order_by("-created")[:8],
                 new_replies=activities.filter(outcome__in=REPLIES).select_related("profile__creator").order_by("-created")[:8],
                 quotes_to_review=quotes.filter(deal__isnull=True).select_related("profile__creator").order_by("-created")[:8],
-                can_manage=managers,
+                can_manage=managers, top_tab=top_tab, top_platform=top_platform, top_platforms=top_platforms,
+                top_posts=top_posts(request.user, top_tab, top_platform),
                 stats=[("Creators", creators.count()), ("Contacted today", activities.filter(created__date=today, outcome__in=COMPLETED_CONTACTS).values("profile__creator").distinct().count()),
                        ("Replied today", activities.filter(created__date=today, outcome__in=REPLIES).values("profile__creator").distinct().count()),
                        ("New quotes today", quotes.filter(created__date=today).count()), ("Open blockers", blockers.count()), ("Potential KOLs", creators.filter(stage="Potential Collaboration").count()),
@@ -200,9 +206,10 @@ def creator(request, pk):
     profile_list = list(obj.profiles.all())
     for p in profile_list:
         p.audience_check = audience_check(p)
+    posts = Post.objects.filter(profile__creator=obj).select_related("profile").order_by("-published_at", "-pk")
     activities = Activity.objects.filter(profile__creator=obj).select_related("actor", "profile").order_by("-created") if role(request.user) != "Finance" else Activity.objects.none()
     quotes = Quote.objects.filter(profile__creator=obj).select_related("profile", "actor", "deal").order_by("-created")
-    return page(request, str(obj), creator=obj, profiles=profile_list, activity=activities[:100], quote_history=quotes,
+    return page(request, str(obj), creator=obj, profiles=profile_list, posts=posts, activity=activities[:100], quote_history=quotes,
                 edit=role(request.user) in EDIT, outcomes=OUTCOMES, issues=BLOCKERS,
                 members=User.objects.filter(is_active=True, member__role="KOL Staff") if role(request.user) in MANAGE else [])
 
@@ -339,6 +346,28 @@ def outreach(request):
     if role(request.user) in ("Finance", "Read-only"):
         raise PermissionDenied
     return page(request, "Outreach", outreach=True, activity=Paginator(items, 50).get_page(request.GET.get("page")))
+
+@login_required
+def add_post(request, pk):
+    allowed(request, EDIT)
+    profile = get_object_or_404(profiles_for(request), pk=pk)
+    def save(form):
+        obj = form.save(commit=False)
+        obj.profile = profile
+        obj.created_by = request.user
+        obj.save()
+        audit(request.user, "Added tracked post", obj.pk)
+        return redirect("creator", pk=profile.creator_id)
+    return form_page(request, "Add tracked post", PostForm(request.POST if request.method == "POST" else None), save)
+
+@login_required
+def edit_post(request, pk):
+    allowed(request, EDIT)
+    obj = get_object_or_404(Post, pk=pk, profile__in=profiles_for(request))
+    def save(form):
+        form.save()
+        return redirect("creator", pk=obj.profile.creator_id)
+    return form_page(request, "Edit tracked post", PostForm(request.POST if request.method == "POST" else None, instance=obj), save)
 
 @login_required
 def add_quote(request, pk):

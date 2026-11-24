@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import Activity, Audit, Blocker, Creator, Deal, Member, Payment, Quote
+from .models import Activity, Audit, Blocker, Creator, Deal, Member, Payment, Post, Quote
 
 def role(user):
     if user.is_superuser:
@@ -173,6 +173,40 @@ def audience_check(profile):
     else:
         verdict = "Check carefully"
     return {"verdict": verdict, "flags": flags}
+
+def top_posts(user, tab="reels", platform=""):
+    """Top 5 creators by their best tracked post in the last 7 days.
+
+    One spot per creator per tab. Reels rank by views (a missing view count
+    excludes the post — missing is not zero); photos rank by reactions +
+    comments + shares (any of the three missing excludes the post until the
+    metrics are complete). Ties break by newest publish date, then highest
+    post ID. Portfolio-only posts never rank. Returns [(post, metric), ...].
+    """
+    if tab not in ("reels", "photos"):
+        tab = "reels"
+    today = timezone.localdate()
+    since = today - timedelta(days=7)
+    posts = Post.objects.filter(profile__creator__in=creators_for(user), portfolio_only=False,
+                                published_at__gte=since, published_at__lte=today)
+    if platform:
+        posts = posts.filter(profile__platform=platform)
+    best = {}
+    for post in posts.select_related("profile__creator"):
+        if tab == "reels":
+            if post.post_type != "Reel" or post.views is None:
+                continue
+            metric = post.views
+        else:
+            if post.post_type != "Photo" or post.interactions is None:
+                continue
+            metric = post.interactions
+        key = post.profile.creator_id
+        current = best.get(key)
+        if current is None or (metric, post.published_at, post.pk) > (current[0], current[1].published_at, current[1].pk):
+            best[key] = (metric, post)
+    ranked = sorted(best.values(), key=lambda item: (-item[0], -item[1].published_at.toordinal(), -item[1].pk))
+    return [(post, metric) for metric, post in ranked[:5]]
 
 def costs(quote):
     return _costs(quote.unit_rm, quote.profile)
