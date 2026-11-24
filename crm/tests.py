@@ -403,6 +403,40 @@ class CRMTests(TestCase):
                                "published_at": "2026-11-24", "views": "100", "media_file": big}, p.pk)
         self.assertEqual(Post.objects.count(), 0)
 
+    def test_gallery_grid_filters_and_shows_media(self):
+        p = self.profile()
+        image = SimpleUploadedFile("photo.jpg", b"fake-image-bytes", content_type="image/jpeg")
+        self.post("add_post", {"post_type": "Photo", "url": "https://facebook.com/example/photo",
+                               "published_at": "2026-11-24", "reactions": "10", "comments": "5",
+                               "shares": "2", "media_file": image}, p.pk)
+        video = SimpleUploadedFile("reel.mp4", b"fake-video", content_type="video/mp4")
+        self.post("add_post", {"post_type": "Reel", "url": "https://facebook.com/example/reel",
+                               "published_at": "2026-11-24", "views": "100", "media_file": video}, p.pk)
+        photo = Post.objects.get(post_type="Photo")
+        reel = Post.objects.get(post_type="Reel")
+        page = self.get("creator", p.creator_id)
+        self.assertContains(page, '<div class="gallery">')
+        self.assertContains(page, f'src="/posts/{photo.pk}/media/"')
+        self.assertContains(page, f'<video controls preload="metadata" src="/posts/{reel.pk}/media/">')
+        photos = self.client.get(reverse("creator", args=[p.creator_id]) + "?gallery=photos", secure=True)
+        self.assertContains(photos, f'src="/posts/{photo.pk}/media/"')
+        self.assertNotContains(photos, f'src="/posts/{reel.pk}/media/"')
+        videos = self.client.get(reverse("creator", args=[p.creator_id]) + "?gallery=videos", secure=True)
+        self.assertContains(videos, f'src="/posts/{reel.pk}/media/"')
+        self.assertNotContains(videos, f'src="/posts/{photo.pk}/media/"')
+
+    def test_gallery_keeps_portfolio_only_and_link_only_posts(self):
+        p = self.profile()
+        Post.objects.create(profile=p, post_type="Photo", url="https://example.com/shot.jpg",
+                            published_at=timezone.localdate(), reactions=1, comments=1, shares=1,
+                            portfolio_only=True, created_by=self.staff)
+        Post.objects.create(profile=p, post_type="Reel", url="https://facebook.com/example/reel",
+                            published_at=timezone.localdate(), views=50, created_by=self.staff)
+        page = self.get("creator", p.creator_id)
+        self.assertContains(page, "Portfolio only")
+        self.assertContains(page, 'src="https://example.com/shot.jpg"')
+        self.assertContains(page, "Watch on Facebook")
+
     def test_add_post_and_gallery(self):
         p = self.profile()
         self.post("add_post", {"post_type": "Photo", "url": "https://facebook.com/example/photo",
@@ -411,7 +445,7 @@ class CRMTests(TestCase):
         post = Post.objects.get()
         self.assertEqual(post.interactions, Decimal(17))
         page = self.get("creator", p.creator_id)
-        self.assertContains(page, "Tracked posts")
+        self.assertContains(page, "Photos &amp; Videos")
         self.assertContains(page, "Portfolio only")
 
     def test_campaigns_budget_rollup(self):
