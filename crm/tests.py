@@ -228,6 +228,62 @@ class CRMTests(TestCase):
         self.assertEqual((Profile.objects.count(), Quote.objects.count(), Deal.objects.count()), (0, 0, 0))
         self.assertEqual(batch.rows.count(), 2)
 
+    def test_import_phone_dedup_and_preview_counts(self):
+        def master_row(name, platform, phone, followers=100, views=1000, likes=10):
+            return [datetime(2026, 11, 20), "demo-staff", platform, name, "", "Food", "Bangladesh",
+                    None, followers, views, likes, 0, 0, None, None, "New", phone, None]
+        wb = Workbook()
+        sheet = wb.active
+        sheet.title = "Master Database"
+        sheet.append(["Head"])
+        sheet.append(master_row("Phone One", "Facebook", "01712345678"))
+        sheet.append(master_row("Phone Two", "TikTok", "01712-345678", followers=50, views=500, likes=5))
+        sheet.append(master_row("Phone Three", "Facebook", "01812345678", followers=80, views=800, likes=8))
+        stream = io.BytesIO()
+        wb.save(stream)
+        batch = create_preview(stream.getvalue(), "phones.xlsx", self.admin)
+        rows = list(batch.rows.order_by("number"))
+        self.assertEqual([r.result for r in rows], ["New", "Pending review", "New"])
+        self.assertIn("Duplicate of an earlier row", rows[1].reason)
+        self.client.force_login(self.admin)
+        self.assertContains(self.get("import_detail", batch.pk), "Duplicates in this file")
+        commit_batch(batch, self.admin)
+        self.assertEqual(Creator.objects.count(), 2)
+        self.assertEqual(Profile.objects.count(), 2)
+        creator_a = Creator.objects.get(name="Phone One")
+        self.assertEqual(batch.rows.get(number=3).profile.creator, creator_a)
+        # A later file with the same phone but a new name matches the saved creator instead of creating one.
+        wb2 = Workbook()
+        sheet2 = wb2.active
+        sheet2.title = "Master Database"
+        sheet2.append(["Head"])
+        sheet2.append(master_row("Renamed", "YouTube", "01712345678"))
+        stream2 = io.BytesIO()
+        wb2.save(stream2)
+        batch2 = create_preview(stream2.getvalue(), "renamed.xlsx", self.admin)
+        renamed = batch2.rows.get()
+        self.assertEqual(renamed.profile.creator, creator_a)
+        self.assertNotEqual(renamed.result, "New")
+        commit_batch(batch2, self.admin)
+        self.assertEqual(Creator.objects.count(), 2)
+        # One phone shared by two saved creators stays ambiguous instead of picking one.
+        for platform in ("Facebook", "Instagram"):
+            creator = Creator.objects.create(name="Shared " + platform, phone="01799999999")
+            Profile.objects.create(creator=creator, platform=platform)
+        wb3 = Workbook()
+        sheet3 = wb3.active
+        sheet3.title = "Master Database"
+        sheet3.append(["Head"])
+        sheet3.append(master_row("Shared Phone", "TikTok", "01799999999", followers=10, views=100, likes=1))
+        stream3 = io.BytesIO()
+        wb3.save(stream3)
+        batch3 = create_preview(stream3.getvalue(), "shared.xlsx", self.admin)
+        shared = batch3.rows.get()
+        self.assertEqual(shared.result, "Pending review")
+        self.assertIn("Multiple possible matches", shared.reason)
+        commit_batch(batch3, self.admin)
+        self.assertEqual(Creator.objects.count(), 4)
+
     def test_privileged_login_requires_mfa(self):
         self.client.logout()
         member = Member.objects.create(user=self.admin, otp_secret=pyotp.random_base32())

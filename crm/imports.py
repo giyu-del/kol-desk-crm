@@ -129,7 +129,7 @@ def identity(row):
 def name_available(row):
     return bool(identity(row)[0])
 
-def match_profile(row, by_url, by_name):
+def match_profile(row, by_url, by_name, by_phone=None, phone=None):
     name, pl, link = identity(row)
     key, ref, problem = None, False, ""
     if link:
@@ -140,6 +140,12 @@ def match_profile(row, by_url, by_name):
             problem = "Invalid profile link."
     if key and key in by_url:
         return by_url[key], pl, key, ref, link, problem
+    if phone and by_phone:
+        matches = by_phone.get(phone, [])
+        if len(matches) == 1 and (not key or not matches[0].canonical or matches[0].canonical == key):
+            return matches[0], pl, key, ref, link, problem
+        if len(matches) > 1 or matches and key:
+            return None, pl, key, ref, link, "Multiple possible matches or conflicting profile link."
     matches = by_name.get((normalized(name), normalized(pl)), [])
     if len(matches) == 1 and (not key or not matches[0].canonical or matches[0].canonical == key):
         return matches[0], pl, key, ref, link, problem
@@ -152,11 +158,14 @@ def match_profile(row, by_url, by_name):
     return None, pl, key, ref, link, problem
 
 def reconcile(batch, commit=False):
-    by_url, by_name = {}, {}
+    by_url, by_name, by_phone = {}, {}, {}
     for item in Profile.objects.select_related("creator"):
         if item.canonical:
             by_url[item.canonical] = item
         by_name.setdefault((normalized(item.creator.name), normalized(item.platform)), []).append(item)
+        number = phone_number(item.creator.phone) if item.creator.phone else None
+        if number:
+            by_phone.setdefault(number, []).append(item)
     users = {normalized(u.username): u for u in User.objects.filter(is_active=True, member__role="KOL Staff")}
     users.update({normalized(u.get_full_name()): u for u in users.values() if u.get_full_name()})
     settings = config()
@@ -180,7 +189,10 @@ def reconcile(batch, commit=False):
         if row.sheet not in OUTREACH | {MASTER}:
             continue
         row.records, row.reason = {}, ""
-        matched, pl, key, ref, link, problem = match_profile(row, by_url, by_name)
+        phone = phone_number(clean(row.raw["cells"][16])) if row.sheet == MASTER else None
+        matched, pl, key, ref, link, problem = match_profile(row, by_url, by_name, by_phone, phone)
+        if row.sheet == MASTER and matched and matched.pk is None:
+            row.reason = "Duplicate of an earlier row in this file."
         row.result = "Matched" if matched else "New"
         if problem or (not matched and (row.sheet != MASTER or not pl)):
             row.result = "Pending review"
@@ -223,6 +235,8 @@ def reconcile(batch, commit=False):
                 if key:
                     by_url[key] = matched
                 by_name.setdefault((normalized(obj.name), normalized(pl)), []).append(matched)
+                if phone:
+                    by_phone.setdefault(phone, []).append(matched)
             contact_date = dated(a[17])
             if a[17] and not contact_date:
                 flags.append("date contacted")
@@ -404,4 +418,5 @@ def detail(request, pk):
     if request.GET.get("review"):
         rows = rows.filter(result="Pending review")
     counts = batch.rows.values("sheet", "result").annotate(total=Count("id")).order_by("sheet", "result")
-    return page(request, "Import reconciliation", batch=batch, import_rows=Paginator(rows, 50).get_page(request.GET.get("page")), counts=counts)
+    duplicate_count = batch.rows.filter(sheet=MASTER, reason__icontains="Duplicate of an earlier row").count()
+    return page(request, "Import reconciliation", batch=batch, import_rows=Paginator(rows, 50).get_page(request.GET.get("page")), counts=counts, duplicate_count=duplicate_count)
