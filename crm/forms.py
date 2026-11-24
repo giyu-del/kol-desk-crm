@@ -52,6 +52,12 @@ class DealForm(forms.ModelForm):
         fields = ["start", "deadline", "due", "terms"]
         widgets = {key: forms.DateInput(attrs={"type": "date"}) for key in ["start", "deadline", "due"]}
 
+class ContentForm(forms.ModelForm):
+    class Meta:
+        model = Deal
+        fields = ["planned_publish", "published_at", "post_url"]
+        widgets = {"planned_publish": forms.DateInput(attrs={"type": "date"}), "published_at": forms.DateInput(attrs={"type": "date"})}
+
 class PaymentForm(forms.ModelForm):
     amount = forms.DecimalField(min_value=Decimal(".01"), max_digits=16, decimal_places=2)
 

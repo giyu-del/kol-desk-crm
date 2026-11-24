@@ -165,6 +165,12 @@ class Deal(models.Model):
     deadline = models.DateField(null=True, blank=True)
     due = models.DateField(null=True, blank=True)
     terms = models.TextField(blank=True)
+    planned_publish = models.DateField(null=True, blank=True)
+    published_at = models.DateField(null=True, blank=True)
+    post_url = models.URLField(max_length=2500, blank=True)
+    content_confirmed = models.BooleanField(default=False)
+    content_confirmed_by = models.ForeignKey(U, null=True, blank=True, on_delete=models.PROTECT, related_name="content_confirmed_deals")
+    content_confirmed_at = models.DateTimeField(null=True, blank=True)
     created = models.DateTimeField(default=timezone.now)
     confirmed_at = models.DateTimeField(null=True, blank=True)
 

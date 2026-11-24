@@ -24,6 +24,7 @@ urlpatterns = [
     path("quotes/<int:pk>/deal/", views.add_deal, name="add_deal"),
     path("deals/", views.deals, name="deals"),
     path("deals/<int:pk>/", views.deal, name="deal"),
+    path("deals/<int:pk>/content/", views.content, name="deal_content"),
     path("deals/<int:pk>/state/", views.deal_state, name="deal_state"),
     path("deals/<int:pk>/payment/", views.request_payment, name="request_payment"),
     path("payments/", views.payments, name="payments"),

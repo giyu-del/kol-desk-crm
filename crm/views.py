@@ -21,7 +21,7 @@ from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
 from django import forms
 
-from .forms import CreatorForm, DealForm, PaymentForm, QuoteForm, ScheduleForm, StatsForm
+from .forms import ContentForm, CreatorForm, DealForm, PaymentForm, QuoteForm, ScheduleForm, StatsForm
 from .models import (Activity, AssignmentRequest, Audit, BLOCKERS, Blocker, Config, Creator,
                      Deal, GroupDelivery, LoginThrottle, Member, OUTCOMES, Payment, Profile, Quote, Report, Schedule, Shift)
 from .services import (COMPLETED_CONTACTS, REPLIES, audit, band, costs, costs_bdt, creators_for,
@@ -403,6 +403,7 @@ def deal(request, pk):
     obj = get_object_or_404(deal_query(request), pk=pk)
     upcoming = obj.state in ("Confirmed / Upcoming", "In Progress", "Completed")
     return page(request, "Deal detail", deal=obj, token=uuid.uuid4(),
+                content_form=ContentForm(instance=obj),
                 may_request=upcoming and role(request.user) in (*EDIT, "Finance"), finance=role(request.user) in FINANCE,
                 transitions={"Pending Approval": ("Confirmed / Upcoming", "Declined"), "Confirmed / Upcoming": ("In Progress",), "In Progress": ("Completed",)}.get(obj.state, ()))
 
@@ -423,6 +424,30 @@ def deal_state(request, pk):
         if new != "Declined":
             Creator.objects.filter(pk=obj.quote.profile.creator_id).update(stage=new, updated=timezone.now())
         audit(request.user, "Deal state", pk, state=new)
+    return redirect("deal", pk=pk)
+
+@login_required
+@require_POST
+def content(request, pk):
+    allowed(request, EDIT)
+    obj = get_object_or_404(deal_query(request), pk=pk)
+    if request.POST.get("action") == "withdraw":
+        obj.content_confirmed, obj.content_confirmed_by, obj.content_confirmed_at = False, None, None
+        obj.save(update_fields=["content_confirmed", "content_confirmed_by", "content_confirmed_at"])
+        audit(request.user, "Content confirmation withdrawn", pk)
+        return redirect("deal", pk=pk)
+    form = ContentForm(request.POST, instance=obj)
+    if not form.is_valid():
+        messages.error(request, "Check the content dates and post link.")
+        return redirect("deal", pk=pk)
+    obj = form.save()
+    if request.POST.get("action") == "confirm":
+        if not obj.post_url or not obj.published_at:
+            messages.error(request, "Add the published date and post link before confirming the content.")
+            return redirect("deal", pk=pk)
+        obj.content_confirmed, obj.content_confirmed_by, obj.content_confirmed_at = True, request.user, timezone.now()
+        obj.save(update_fields=["content_confirmed", "content_confirmed_by", "content_confirmed_at"])
+        audit(request.user, "Content confirmed", pk)
     return redirect("deal", pk=pk)
 
 @login_required
@@ -465,6 +490,9 @@ def payment_state(request, pk):
         valid = {"Pending Approval": ("Approved", "Rejected"), "Approved": ("Paid", "Rejected"), "Paid": ("Reversed",)}
         if new not in valid.get(payment.state, ()):
             messages.error(request, "That payment transition is unavailable.")
+            return redirect("deal", pk=payment.deal_id)
+        if new == "Approved" and not payment.deal.content_confirmed:
+            messages.error(request, "Confirm the content is live before approving this payment.")
             return redirect("deal", pk=payment.deal_id)
         if new == "Reversed" and not request.POST.get("reason", "").strip():
             messages.error(request, "Enter a reversal reason.")
