@@ -1,5 +1,6 @@
 import re
 from collections import defaultdict
+from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import parse_qs, urlsplit
 
@@ -24,6 +25,42 @@ def creators_for(user):
 
 def audit(user, action, target, **data):
     Audit.objects.create(actor=user, action=action, target=str(target), data=data)
+
+# Automatic follow-up for a new pipeline stage: (days until due, task text).
+# No entry means no automatic task for that stage.
+STAGE_FOLLOWUPS = {
+    "Contacted": (5, "Follow up if no reply"),
+    "Replied": (1, "Send the brief and offer details"),
+    "Potential Collaboration": (2, "Follow up on the collaboration"),
+    "Negotiating": (2, "Follow up on the negotiation"),
+    "Confirmed / Upcoming": (2, "Share the brief and confirm the publish date"),
+    "In Progress": (2, "Check the post is live"),
+}
+
+def schedule_stage_followup(creator, stage, actor, due=None, profile=None):
+    """Create the automatic follow-up for a new stage, unless one is already waiting.
+
+    `due` overrides the rule's day count (used for "In Progress", due on the
+    planned publish date). Returns the created Activity, or None.
+    """
+    rule = STAGE_FOLLOWUPS.get(stage)
+    if rule is None:
+        return None
+    days, note = rule
+    profile = profile or creator.profiles.order_by("pk").first()
+    if profile is None:
+        return None
+    if Activity.objects.filter(profile=profile, done=False, outcome="Follow-up Needed", notes=note).exists():
+        return None
+    when = due or timezone.now() + timedelta(days=days)
+    return Activity.objects.create(profile=profile, actor=actor, channel="System",
+                                   outcome="Follow-up Needed", notes=note, followup=when)
+
+def publish_due(day):
+    """9:00 on the planned publish date, or None when no date is set."""
+    if not day:
+        return None
+    return timezone.make_aware(datetime.combine(day, time(9, 0)))
 
 def social_url(raw):
     url = urlsplit(raw if "://" in raw else "https://" + raw)

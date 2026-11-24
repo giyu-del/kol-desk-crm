@@ -25,7 +25,8 @@ from .forms import ContentForm, CreatorForm, DealForm, PaymentForm, QuoteForm, S
 from .models import (Activity, AssignmentRequest, Audit, BLOCKERS, Blocker, Config, Creator,
                      Deal, GroupDelivery, LoginThrottle, Member, OUTCOMES, Payment, Profile, Quote, Report, Schedule, Shift)
 from .services import (COMPLETED_CONTACTS, REPLIES, audit, band, costs, costs_bdt, creators_for,
-                       group_report, phone_number, report_data, role, score_rows, social_url)
+                       group_report, phone_number, publish_due, report_data, role, schedule_stage_followup,
+                       score_rows, social_url)
 
 User = get_user_model()
 MANAGE = ("Admin", "Manager")
@@ -194,6 +195,8 @@ def edit_creator(request, pk):
         if form.cleaned_data["stage"] in ("Confirmed / Upcoming", "In Progress", "Completed") and form.cleaned_data["stage"] != old:
             raise ValueError("Update the stage from the approved deal.")
         form.save()
+        if form.cleaned_data["stage"] != old:
+            schedule_stage_followup(obj, form.cleaned_data["stage"], request.user)
         return redirect("creator", pk=pk)
     old = obj.stage
     return form_page(request, "Edit creator", CreatorForm(request.POST if request.method == "POST" else None, instance=obj), save)
@@ -266,6 +269,7 @@ def record(request, pk):
             if obj.creator.stage != "Replied" or new != "Contacted":
                 obj.creator.stage = new
                 obj.creator.save(update_fields=["stage", "updated"])
+                schedule_stage_followup(obj.creator, new, request.user, profile=obj)
     return redirect("creator", pk=obj.creator_id)
 
 @login_required
@@ -329,6 +333,7 @@ def add_quote(request, pk):
             if profile.creator.stage in ("New", "Contacted", "Replied", "Potential Collaboration"):
                 profile.creator.stage = "Negotiating"
                 profile.creator.save(update_fields=["stage", "updated"])
+                schedule_stage_followup(profile.creator, "Negotiating", request.user, profile=profile)
             audit(request.user, "Added offer", obj.pk)
         return redirect("creator", pk=profile.creator_id)
     return form_page(request, "Record offer", QuoteForm(request.POST if request.method == "POST" else None), save)
@@ -423,6 +428,8 @@ def deal_state(request, pk):
         obj.save()
         if new != "Declined":
             Creator.objects.filter(pk=obj.quote.profile.creator_id).update(stage=new, updated=timezone.now())
+            schedule_stage_followup(obj.quote.profile.creator, new, request.user,
+                                    due=publish_due(obj.planned_publish) if new == "In Progress" else None)
         audit(request.user, "Deal state", pk, state=new)
     return redirect("deal", pk=pk)
 
