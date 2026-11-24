@@ -25,9 +25,9 @@ from django import forms
 from .forms import ContentForm, CreatorForm, DealForm, PaymentForm, QuoteForm, ScheduleForm, StatsForm
 from .models import (Activity, AssignmentRequest, Audit, BLOCKERS, Blocker, Config, Creator,
                      Deal, GroupDelivery, LoginThrottle, Member, OUTCOMES, Payment, Profile, Quote, Report, Schedule, Shift)
-from .services import (COMPLETED_CONTACTS, REPLIES, audit, band, costs, costs_bdt, creators_for,
-                       group_report, phone_number, publish_due, report_data, role, schedule_stage_followup,
-                       score_rows, social_url)
+from .services import (COMPLETED_CONTACTS, REPLIES, audit, audience_check, band, costs, costs_bdt,
+                       creators_for, group_report, phone_number, publish_due, report_data, role,
+                       schedule_stage_followup, score_rows, social_url)
 
 User = get_user_model()
 MANAGE = ("Admin", "Manager")
@@ -198,6 +198,8 @@ def quick_add(request):
 def creator(request, pk):
     obj = get_object_or_404(creators_for(request.user), pk=pk)
     profile_list = list(obj.profiles.all())
+    for p in profile_list:
+        p.audience_check = audience_check(p)
     activities = Activity.objects.filter(profile__creator=obj).select_related("actor", "profile").order_by("-created") if role(request.user) != "Finance" else Activity.objects.none()
     quotes = Quote.objects.filter(profile__creator=obj).select_related("profile", "actor", "deal").order_by("-created")
     return page(request, str(obj), creator=obj, profiles=profile_list, activity=activities[:100], quote_history=quotes,
