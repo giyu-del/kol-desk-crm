@@ -2,12 +2,13 @@ import io
 import uuid
 from unittest.mock import patch
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pyotp
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from openpyxl import Workbook
 
 from .imports import commit_batch, create_preview, reverse_batch
@@ -90,6 +91,52 @@ class CRMTests(TestCase):
         page = self.get("quotes")
         self.assertContains(page, "Cost / engagement (BDT)")
         self.assertContains(page, "3110")
+
+    def test_my_followups_queue(self):
+        now = timezone.now()
+        overdue = Activity.objects.create(profile=self.profile(key="overdue-one"), actor=self.staff,
+                                          channel="WhatsApp", outcome="Follow-up Needed",
+                                          followup=now - timedelta(days=1))
+        today = Activity.objects.create(profile=self.profile(key="today-two"), actor=self.staff,
+                                        channel="Call", outcome="Spoke",
+                                        followup=now + timedelta(hours=2))
+        Activity.objects.create(profile=self.profile(key="later-three"), actor=self.staff,
+                                channel="Facebook", outcome="Message Sent",
+                                followup=now + timedelta(days=3))
+        Activity.objects.create(profile=self.profile(key="done-one"), actor=self.staff,
+                                channel="WhatsApp", outcome="Follow-up Needed",
+                                followup=now - timedelta(days=2), done=True)
+        peer_profile = self.profile(user=self.other, key="peer")
+        Activity.objects.create(profile=peer_profile, actor=self.other,
+                                channel="WhatsApp", outcome="Follow-up Needed",
+                                followup=now - timedelta(days=1))
+        page = self.get("my_followups")
+        self.assertContains(page, "Overdue")
+        self.assertContains(page, "Due today")
+        self.assertContains(page, "Upcoming")
+        content = page.content.decode()
+        self.assertLess(content.index("overdue-one"), content.index("today-two"))
+        self.assertLess(content.index("today-two"), content.index("later-three"))
+        self.assertNotIn("done-one", content)
+        self.assertNotIn("peer", content)
+        groups = dict(page.context["queue_groups"])
+        self.assertEqual([str(a.profile.creator) for a in groups["Overdue"]], ["overdue-one"])
+        self.assertEqual([str(a.profile.creator) for a in groups["Upcoming"]], ["later-three"])
+        # Mark done returns to the queue and removes the row.
+        self.assertRedirects(self.post("finish_followup", {"next": "my_followups"}, overdue.pk),
+                             reverse("my_followups"))
+        self.assertTrue(Activity.objects.get(pk=overdue.pk).done)
+        self.assertNotIn("overdue-one", self.get("my_followups").content.decode())
+        # Snooze moves the due time exactly one day later.
+        before = Activity.objects.get(pk=today.pk).followup
+        self.post("snooze_followup", {}, today.pk)
+        self.assertEqual(Activity.objects.get(pk=today.pk).followup, before + timedelta(days=1))
+        self.assertContains(self.get("my_followups"), "today-two")
+        # A manager sees the other staff member's follow-ups; Finance may not open the queue.
+        self.client.force_login(self.manager)
+        self.assertContains(self.get("my_followups"), "peer")
+        self.client.force_login(self.finance)
+        self.assertEqual(self.get("my_followups").status_code, 403)
 
     def test_duplicate_link_and_record_access(self):
         p = self.profile(user=self.other, key="c123")
