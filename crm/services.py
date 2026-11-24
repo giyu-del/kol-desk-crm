@@ -87,15 +87,23 @@ def score_rows(rows, weights, cheaper=(), *, allow_single=False):
             scores[item] = (sum(rank * w for rank, w in present) / sum(w for _, w in present)).quantize(Decimal(".1"), rounding=ROUND_HALF_UP)
     return scores
 
-def costs(quote):
-    unit = quote.unit_rm
-    profile = quote.profile
+def _costs(unit, profile):
+    """(cost per engagement, cost per 1k followers, cost per 1k views)
+    for a per-Reel price in one currency. Any figure whose underlying
+    data is missing comes back as None."""
     if unit is None:
         return None, None, None
     cpe = unit / profile.engagement if profile.engagement and profile.views else None
     cpf = unit * 1000 / profile.followers if profile.followers else None
     cpv = unit * 1000 / profile.views if profile.views else None
     return cpe, cpf, cpv
+
+def costs(quote):
+    return _costs(quote.unit_rm, quote.profile)
+
+def costs_bdt(quote):
+    """Same three per-unit costs as costs(), in BDT instead of RM."""
+    return _costs(quote.unit_bdt, quote.profile)
 
 def band(score):
     if score is None:
