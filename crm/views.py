@@ -207,9 +207,16 @@ def creator(request, pk):
     for p in profile_list:
         p.audience_check = audience_check(p)
     posts = Post.objects.filter(profile__creator=obj).select_related("profile").order_by("-published_at", "-pk")
+    gallery_tab = request.GET.get("gallery", "all")
+    if gallery_tab not in ("all", "photos", "videos"):
+        gallery_tab = "all"
+    if gallery_tab == "photos":
+        posts = posts.filter(post_type="Photo")
+    elif gallery_tab == "videos":
+        posts = posts.filter(post_type="Reel")
     activities = Activity.objects.filter(profile__creator=obj).select_related("actor", "profile").order_by("-created") if role(request.user) != "Finance" else Activity.objects.none()
     quotes = Quote.objects.filter(profile__creator=obj).select_related("profile", "actor", "deal").order_by("-created")
-    return page(request, str(obj), creator=obj, profiles=profile_list, posts=posts, activity=activities[:100], quote_history=quotes,
+    return page(request, str(obj), creator=obj, profiles=profile_list, posts=posts, gallery_tab=gallery_tab, activity=activities[:100], quote_history=quotes,
                 edit=role(request.user) in EDIT, outcomes=OUTCOMES, issues=BLOCKERS,
                 members=User.objects.filter(is_active=True, member__role="KOL Staff") if role(request.user) in MANAGE else [])
 

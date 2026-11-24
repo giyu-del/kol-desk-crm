@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 
 from django.conf import settings
@@ -107,6 +108,14 @@ class Post(models.Model):
     def interactions(self):
         values = [self.reactions, self.comments, self.shares]
         return sum(values, Decimal(0)) if all(v is not None for v in values) else None
+
+    @property
+    def media_is_video(self):
+        return (self.media_type or "").startswith("video/")
+
+    @property
+    def url_is_image(self):
+        return bool(re.search(r"\.(jpg|jpeg|png|webp|gif)(\?|#|$)", self.url or "", re.I))
 
     def __str__(self):
         return f"{self.profile.creator} · {self.profile.platform} · {self.post_type}"
