@@ -135,6 +135,45 @@ def _costs(unit, profile):
     cpv = unit * 1000 / profile.views if profile.views else None
     return cpe, cpf, cpv
 
+def audience_check(profile):
+    """Simple fake-follower check from the numbers already in the CRM.
+
+    Returns {"verdict": ..., "flags": [...]}. The flags are plain-language
+    warnings, not proof: a real audience can trip one, so nothing is blocked
+    or labelled fake. Growth and comment-authenticity checks are not possible
+    here — the CRM keeps no follower history and no comment text.
+    """
+    flags = []
+    engagement = profile.engagement
+    followers = profile.followers
+    if engagement is None and followers is None:
+        return {"verdict": "Needs data",
+                "flags": ["Add followers, views and engagement numbers to check this audience."]}
+    er = profile.er_followers
+    if followers and followers >= 1000 and er is not None:
+        if er < Decimal("0.005"):
+            flags.append(f"Very low engagement: only {er:.1%} of followers interact. "
+                         "Bought or inactive followers are possible.")
+        elif er > Decimal("0.25"):
+            flags.append(f"Unusually high engagement: {er:.1%} of followers interact. "
+                         "Engagement pods or bought engagement are possible.")
+        if profile.views is not None and profile.views / followers < Decimal("0.05"):
+            flags.append(f"Views are much lower than followers: average views are "
+                         f"{profile.views / followers:.1%} of the follower count. "
+                         "Many followers may be bought or inactive.")
+    if profile.likes and profile.comments is not None and engagement:
+        share = profile.comments / engagement
+        if share < Decimal("0.01"):
+            flags.append(f"Almost no comments: only {share:.1%} of engagement is comments. "
+                         "Real audiences usually comment more.")
+    if not flags:
+        verdict = "Looks healthy"
+    elif len(flags) < 3:
+        verdict = "Worth a look"
+    else:
+        verdict = "Check carefully"
+    return {"verdict": verdict, "flags": flags}
+
 def costs(quote):
     return _costs(quote.unit_rm, quote.profile)
 

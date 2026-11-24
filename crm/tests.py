@@ -14,7 +14,7 @@ from openpyxl import Workbook
 
 from .imports import commit_batch, create_preview, reverse_batch
 from .models import Activity, AssignmentRequest, Blocker, Creator, Deal, GroupDelivery, Member, Payment, Profile, Quote, Report, Shift
-from .services import costs, costs_bdt, score_rows, social_url
+from .services import audience_check, costs, costs_bdt, score_rows, social_url
 
 User = get_user_model()
 
@@ -42,6 +42,29 @@ class CRMTests(TestCase):
         obj = Creator.objects.create(name=key, owner=user or self.staff, added_by=user or self.staff, phone="01712345678")
         return Profile.objects.create(creator=obj, platform="Facebook", url=f"https://facebook.com/{key}",
             canonical=f"facebook.com/{key}", views=Decimal(1000), followers=4000, likes=Decimal(40), shares=Decimal(10))
+
+    def test_audience_check_flags_suspicious_profiles(self):
+        p = self.profile()
+        self.assertEqual(audience_check(p), {"verdict": "Looks healthy", "flags": []})
+        self.assertContains(self.get("creator", p.creator_id), "Audience check: <strong>Looks healthy</strong>")
+        p.followers, p.views, p.likes, p.comments, p.shares = 10000, Decimal(5000), Decimal(30), Decimal(5), Decimal(5)
+        check = audience_check(p)
+        self.assertEqual(check["verdict"], "Worth a look")
+        self.assertEqual(len(check["flags"]), 1)
+        self.assertIn("Very low engagement", check["flags"][0])
+        p.followers, p.views, p.likes, p.comments, p.shares = 50000, Decimal(800), Decimal(2000), Decimal(2), Decimal(10)
+        check = audience_check(p)
+        self.assertEqual(check["verdict"], "Worth a look")
+        self.assertEqual(len(check["flags"]), 2)
+        self.assertTrue(any("Almost no comments" in flag for flag in check["flags"]))
+        self.assertTrue(any("Views are much lower" in flag for flag in check["flags"]))
+        p.followers, p.views, p.likes, p.comments, p.shares = 50000, Decimal(800), Decimal(100), Decimal(0), Decimal(0)
+        check = audience_check(p)
+        self.assertEqual((check["verdict"], len(check["flags"])), ("Check carefully", 3))
+        p.followers, p.views, p.likes, p.comments, p.shares = 1000, Decimal(10000), Decimal(300), Decimal(20), Decimal(10)
+        self.assertIn("Unusually high engagement", audience_check(p)["flags"][0])
+        p.followers = p.views = p.likes = p.comments = p.shares = None
+        self.assertEqual(audience_check(p)["verdict"], "Needs data")
 
     def test_engagement_and_percentiles(self):
         p = self.profile()
