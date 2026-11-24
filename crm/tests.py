@@ -185,6 +185,8 @@ class CRMTests(TestCase):
         for _ in range(2):
             self.post("request_payment", {"amount": "2220", "token": token}, deal.pk)
         pmt = Payment.objects.get()
+        self.post("deal_content", {"planned_publish": "2026-11-25", "published_at": "2026-11-25",
+                                   "post_url": "https://facebook.com/example/post", "action": "confirm"}, deal.pk)
         self.assertEqual(self.post("payment_state", {"state": "Approved"}, pmt.pk).status_code, 403)
         self.client.force_login(self.finance)
         self.post("payment_state", {"state": "Approved"}, pmt.pk)
@@ -201,6 +203,46 @@ class CRMTests(TestCase):
 
         pdf = self.client.get(reverse("report", args=[shift.pk]) + "?export=pdf", secure=True)
         self.assertTrue(pdf.content.startswith(b"%PDF"))
+
+    def test_payment_needs_confirmed_content(self):
+        self.post("quick_add", {"url": "https://facebook.com/example", "name": "উদাহরণ"})
+        p = Profile.objects.get()
+        self.post("add_quote", {"kind": "Creator quote", "amount": "6220", "currency": "BDT",
+                                "format": "Reels", "basis": "Package", "reels": 2}, p.pk)
+        q = Quote.objects.get(kind="Creator quote")
+        self.post("add_deal", {}, q.pk)
+        deal = Deal.objects.get()
+        self.client.force_login(self.manager)
+        self.post("deal_state", {"state": "Confirmed / Upcoming"}, deal.pk)
+        self.client.force_login(self.staff)
+        self.post("request_payment", {"amount": "2220", "token": uuid.uuid4()}, deal.pk)
+        pmt = Payment.objects.get()
+        self.assertContains(self.get("deals"), "Not confirmed")
+        # Finance cannot approve while the content is unconfirmed.
+        self.client.force_login(self.finance)
+        self.post("payment_state", {"state": "Approved"}, pmt.pk)
+        self.assertEqual(Payment.objects.get().state, "Pending Approval")
+        # Confirming needs the published date and the post link.
+        self.client.force_login(self.staff)
+        self.post("deal_content", {"planned_publish": "2026-11-25", "action": "confirm"}, deal.pk)
+        self.assertFalse(Deal.objects.get().content_confirmed)
+        self.post("deal_content", {"planned_publish": "2026-11-25", "published_at": "2026-11-25",
+                                   "post_url": "https://facebook.com/example/post", "action": "confirm"}, deal.pk)
+        confirmed = Deal.objects.get()
+        self.assertTrue(confirmed.content_confirmed)
+        self.assertEqual(confirmed.content_confirmed_by, self.staff)
+        self.assertIsNotNone(confirmed.content_confirmed_at)
+        self.assertContains(self.get("deal", deal.pk), "Content confirmed")
+        self.assertContains(self.get("deals"), "Confirmed")
+        # Approval now works; withdrawing the confirmation closes the gate again.
+        self.client.force_login(self.finance)
+        self.post("payment_state", {"state": "Approved"}, pmt.pk)
+        self.assertEqual(Payment.objects.get().state, "Approved")
+        self.client.force_login(self.staff)
+        self.post("deal_content", {"action": "withdraw"}, deal.pk)
+        withdrawn = Deal.objects.get()
+        self.assertFalse(withdrawn.content_confirmed)
+        self.assertEqual(withdrawn.post_url, "https://facebook.com/example/post")
 
     def test_import_preview_commit_repeat_and_reverse(self):
         wb = Workbook()
