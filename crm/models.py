@@ -157,8 +157,40 @@ class Quote(models.Model):
     def __str__(self):
         return f"{self.profile} · {self.currency} {self.amount} · {self.kind}"
 
+class Campaign(models.Model):
+    name = models.CharField(max_length=240)
+    budget = models.DecimalField(max_digits=16, decimal_places=2)
+    start = models.DateField(null=True, blank=True)
+    end = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(U, null=True, on_delete=models.PROTECT)
+    created = models.DateTimeField(default=timezone.now)
+
+    APPROVED_STATES = ("Confirmed / Upcoming", "In Progress", "Completed")
+
+    @property
+    def committed(self):
+        """BDT agreed on approved deals. Declined and unapproved deals excluded."""
+        return sum((d.quote.bdt for d in self.deals.filter(state__in=self.APPROVED_STATES)), Decimal(0))
+
+    @property
+    def paid_bdt(self):
+        """BDT actually paid on approved deals (RM payments converted at the quote's rate)."""
+        total = Decimal(0)
+        for d in self.deals.filter(state__in=self.APPROVED_STATES):
+            total += d.paid if d.quote.currency == "BDT" else d.paid * d.quote.fx
+        return total
+
+    @property
+    def remaining(self):
+        return self.budget - self.committed
+
+    def __str__(self):
+        return self.name
+
 class Deal(models.Model):
     quote = models.OneToOneField(Quote, on_delete=models.PROTECT, related_name="deal")
+    campaign = models.ForeignKey(Campaign, null=True, blank=True, on_delete=models.SET_NULL, related_name="deals")
     actor = models.ForeignKey(U, null=True, on_delete=models.PROTECT)
     state = models.CharField(max_length=30, choices=options(["Pending Approval", "Confirmed / Upcoming", "In Progress", "Completed", "Declined"]), default="Pending Approval")
     start = models.DateField(null=True, blank=True)
