@@ -2,7 +2,7 @@ import io
 import uuid
 from unittest.mock import patch
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pyotp
 from django.contrib.auth import get_user_model
@@ -243,6 +243,42 @@ class CRMTests(TestCase):
         withdrawn = Deal.objects.get()
         self.assertFalse(withdrawn.content_confirmed)
         self.assertEqual(withdrawn.post_url, "https://facebook.com/example/post")
+
+    def test_stage_change_creates_followup(self):
+        self.post("quick_add", {"url": "https://facebook.com/example", "name": "উদাহরণ"})
+        p = Profile.objects.get()
+        self.assertEqual(Activity.objects.count(), 0)
+        self.post("record", {"outcome": "Message Sent", "channel": "WhatsApp"}, p.pk)
+        task = Activity.objects.get(notes="Follow up if no reply")
+        self.assertEqual((task.outcome, task.channel, task.actor, task.done),
+                         ("Follow-up Needed", "System", self.staff, False))
+        self.assertEqual(timezone.localtime(task.followup).date(), timezone.localdate() + timedelta(days=5))
+        self.assertContains(self.get("my_followups"), "Follow up if no reply")
+        self.post("record", {"outcome": "Replied", "channel": "WhatsApp"}, p.pk)
+        self.assertTrue(Activity.objects.filter(notes="Send the brief and offer details").exists())
+        # Repeating the earlier stage creates no duplicate task.
+        self.post("record", {"outcome": "Message Sent", "channel": "WhatsApp"}, p.pk)
+        self.assertEqual(Activity.objects.filter(notes="Follow up if no reply").count(), 1)
+        # Manual stage edit, then an offer, then the deal flow.
+        self.post("edit_creator", {"name": "উদাহরণ", "stage": "Potential Collaboration"}, p.creator_id)
+        self.assertTrue(Activity.objects.filter(notes="Follow up on the collaboration").exists())
+        self.post("add_quote", {"kind": "Creator quote", "amount": "6220", "currency": "BDT",
+                                "format": "Reels", "basis": "Package", "reels": 2}, p.pk)
+        self.assertTrue(Activity.objects.filter(notes="Follow up on the negotiation").exists())
+        q = Quote.objects.get(kind="Creator quote")
+        self.post("add_deal", {}, q.pk)
+        deal = Deal.objects.get()
+        self.client.force_login(self.manager)
+        self.post("deal_state", {"state": "Confirmed / Upcoming"}, deal.pk)
+        self.assertTrue(Activity.objects.filter(notes="Share the brief and confirm the publish date").exists())
+        Deal.objects.filter(pk=deal.pk).update(planned_publish=date(2026, 12, 5))
+        self.post("deal_state", {"state": "In Progress"}, deal.pk)
+        live = Activity.objects.get(notes="Check the post is live")
+        self.assertEqual(live.followup, timezone.make_aware(datetime(2026, 12, 5, 9, 0)))
+        # Completing the deal creates no further task.
+        before = Activity.objects.filter(outcome="Follow-up Needed", channel="System").count()
+        self.post("deal_state", {"state": "Completed"}, deal.pk)
+        self.assertEqual(Activity.objects.filter(outcome="Follow-up Needed", channel="System").count(), before)
 
     def test_import_preview_commit_repeat_and_reverse(self):
         wb = Workbook()
