@@ -347,6 +347,22 @@ def outreach(request):
         raise PermissionDenied
     return page(request, "Outreach", outreach=True, activity=Paginator(items, 50).get_page(request.GET.get("page")))
 
+def _save_post_media(form, obj):
+    """Store a newly uploaded file on the post, or clear it when asked.
+
+    Files live in the database (like payment receipts), so they survive
+    redeploys — the app server's disk does not keep uploads.
+    """
+    uploaded = form.cleaned_data.get("media_file")
+    if uploaded:
+        obj.media = uploaded.read()
+        obj.media_name = uploaded.name[:255]
+        obj.media_type = uploaded.content_type
+    elif form.cleaned_data.get("remove_media"):
+        obj.media = None
+        obj.media_name = ""
+        obj.media_type = ""
+
 @login_required
 def add_post(request, pk):
     allowed(request, EDIT)
@@ -355,19 +371,31 @@ def add_post(request, pk):
         obj = form.save(commit=False)
         obj.profile = profile
         obj.created_by = request.user
+        _save_post_media(form, obj)
         obj.save()
         audit(request.user, "Added tracked post", obj.pk)
         return redirect("creator", pk=profile.creator_id)
-    return form_page(request, "Add tracked post", PostForm(request.POST if request.method == "POST" else None), save)
+    return form_page(request, "Add tracked post",
+                    PostForm(request.POST if request.method == "POST" else None,
+                           request.FILES if request.method == "POST" else None), save)
 
 @login_required
 def edit_post(request, pk):
     allowed(request, EDIT)
     obj = get_object_or_404(Post, pk=pk, profile__in=profiles_for(request))
     def save(form):
-        form.save()
+        obj = form.save(commit=False)
+        _save_post_media(form, obj)
+        obj.save()
         return redirect("creator", pk=obj.profile.creator_id)
-    return form_page(request, "Edit tracked post", PostForm(request.POST if request.method == "POST" else None, instance=obj), save)
+    return form_page(request, "Edit tracked post",
+                    PostForm(request.POST if request.method == "POST" else None,
+                           request.FILES if request.method == "POST" else None, instance=obj), save)
+
+@login_required
+def post_media(request, pk):
+    post = get_object_or_404(Post, pk=pk, profile__in=profiles_for(request), media__isnull=False)
+    return HttpResponse(bytes(post.media), content_type=post.media_type or "application/octet-stream")
 
 @login_required
 def add_quote(request, pk):

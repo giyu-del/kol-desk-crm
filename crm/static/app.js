@@ -18,22 +18,31 @@ const preview = document.querySelector("#post-preview");
 document.querySelectorAll("[data-post-preview]").forEach(button => button.addEventListener("click", () => {
   if (!preview || !preview.showModal) return;
   const url = button.dataset.url;
+  const mediaUrl = button.dataset.mediaUrl;
+  const mediaType = button.dataset.mediaType || "";
   const frame = preview.querySelector("iframe");
   const img = preview.querySelector("img");
+  const video = preview.querySelector("video");
   preview.querySelector("#post-preview-title").textContent = button.dataset.title || "Post";
   preview.querySelector("#open-original").href = url;
-  if (/\.(jpg|jpeg|png|webp|gif)(\?|#|$)/i.test(url)) {
+  frame.hidden = true; frame.removeAttribute("src");
+  img.hidden = true; img.removeAttribute("src");
+  video.hidden = true; video.removeAttribute("src");
+  if (mediaUrl && mediaType.startsWith("video/")) {
+    video.src = mediaUrl; video.hidden = false;
+  } else if (mediaUrl && mediaType.startsWith("image/")) {
+    img.src = mediaUrl; img.hidden = false;
+  } else if (/\.(jpg|jpeg|png|webp|gif)(\?|#|$)/i.test(url)) {
     img.src = url; img.hidden = false;
-    frame.hidden = true; frame.removeAttribute("src");
   } else {
     frame.src = url; frame.hidden = false;
-    img.hidden = true; img.removeAttribute("src");
   }
   preview.showModal();
 }));
 preview?.addEventListener("close", () => {
   preview.querySelector("iframe").removeAttribute("src");
   preview.querySelector("img").removeAttribute("src");
+  preview.querySelector("video").removeAttribute("src");
 });
 
 document.querySelectorAll("[data-copy]").forEach(button => button.addEventListener("click", async () => {

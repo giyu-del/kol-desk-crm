@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import pyotp
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -347,6 +348,60 @@ class CRMTests(TestCase):
         self.assertEqual([post.pk for post, _ in top_posts(self.staff, "reels", "")], [edge.pk])
         self.assertEqual(top_posts(self.user("other", "KOL Staff"), "reels", ""), [])
         self.assertEqual([post.pk for post, _ in top_posts(self.manager, "reels", "")], [edge.pk])
+
+    def test_post_media_upload_and_preview(self):
+        p = self.profile()
+        image = SimpleUploadedFile("photo.jpg", b"fake-image-bytes", content_type="image/jpeg")
+        self.post("add_post", {"post_type": "Photo", "url": "https://facebook.com/example/photo",
+                               "published_at": "2026-11-24", "reactions": "10", "comments": "5",
+                               "shares": "2", "media_file": image}, p.pk)
+        post = Post.objects.get()
+        self.assertEqual((bytes(post.media), post.media_name, post.media_type),
+                         (b"fake-image-bytes", "photo.jpg", "image/jpeg"))
+        response = self.get("post_media", post.pk)
+        self.assertEqual((response.status_code, response.content, response["Content-Type"]),
+                         (200, b"fake-image-bytes", "image/jpeg"))
+        # Another staff member cannot fetch it.
+        self.client.force_login(self.user("other", "KOL Staff"))
+        self.assertEqual(self.get("post_media", post.pk).status_code, 404)
+        self.client.force_login(self.staff)
+        # The dashboard preview uses the uploaded file (Photos tab).
+        Post.objects.filter(pk=post.pk).update(published_at=timezone.localdate())
+        response = self.client.get(reverse("home") + "?top_tab=photos", secure=True)
+        self.assertContains(response, f'data-media-url="/posts/{post.pk}/media/"')
+        self.assertContains(response, "video controls")
+
+    def test_post_media_validation_and_replace(self):
+        p = self.profile()
+        # An image for a Reel is rejected; nothing is saved.
+        image = SimpleUploadedFile("photo.jpg", b"x", content_type="image/jpeg")
+        self.post("add_post", {"post_type": "Reel", "url": "https://facebook.com/example/reel",
+                               "published_at": "2026-11-24", "views": "100", "media_file": image}, p.pk)
+        self.assertEqual(Post.objects.count(), 0)
+        # A video for a Reel works; editing without a new file keeps it.
+        video = SimpleUploadedFile("reel.mp4", b"fake-video", content_type="video/mp4")
+        self.post("add_post", {"post_type": "Reel", "url": "https://facebook.com/example/reel",
+                               "published_at": "2026-11-24", "views": "100", "media_file": video}, p.pk)
+        post = Post.objects.get()
+        self.assertEqual(post.media_type, "video/mp4")
+        self.post("edit_post", {"post_type": "Reel", "url": "https://facebook.com/example/reel",
+                                "published_at": "2026-11-24", "views": "200"}, post.pk)
+        self.assertEqual(bytes(Post.objects.get().media), b"fake-video")
+        # Replacing works, and removing clears it.
+        video2 = SimpleUploadedFile("reel2.mp4", b"new-video", content_type="video/mp4")
+        self.post("edit_post", {"post_type": "Reel", "url": "https://facebook.com/example/reel",
+                                "published_at": "2026-11-24", "views": "200", "media_file": video2}, post.pk)
+        self.assertEqual(bytes(Post.objects.get().media), b"new-video")
+        self.post("edit_post", {"post_type": "Reel", "url": "https://facebook.com/example/reel",
+                                "published_at": "2026-11-24", "views": "200", "remove_media": "on"}, post.pk)
+        self.assertIsNone(Post.objects.get().media)
+
+    def test_post_media_too_big_is_rejected(self):
+        p = self.profile()
+        big = SimpleUploadedFile("big.mp4", b"x" * (26 * 1024 * 1024), content_type="video/mp4")
+        self.post("add_post", {"post_type": "Reel", "url": "https://facebook.com/example/reel",
+                               "published_at": "2026-11-24", "views": "100", "media_file": big}, p.pk)
+        self.assertEqual(Post.objects.count(), 0)
 
     def test_add_post_and_gallery(self):
         p = self.profile()
