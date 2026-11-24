@@ -1,6 +1,6 @@
 from decimal import Decimal
 from django import forms
-from .models import Activity, Creator, Deal, Payment, Profile, Quote, Schedule
+from .models import Activity, Campaign, Creator, Deal, Payment, Profile, Quote, Schedule
 
 class CreatorForm(forms.ModelForm):
     class Meta:
@@ -46,10 +46,16 @@ class QuoteForm(forms.ModelForm):
                 self.add_error(key, "Enter a positive amount.")
         return data
 
+class CampaignForm(forms.ModelForm):
+    class Meta:
+        model = Campaign
+        fields = ["name", "budget", "start", "end", "notes"]
+        widgets = {"start": forms.DateInput(attrs={"type": "date"}), "end": forms.DateInput(attrs={"type": "date"})}
+
 class DealForm(forms.ModelForm):
     class Meta:
         model = Deal
-        fields = ["start", "deadline", "due", "terms"]
+        fields = ["campaign", "start", "deadline", "due", "terms"]
         widgets = {key: forms.DateInput(attrs={"type": "date"}) for key in ["start", "deadline", "due"]}
 
 class ContentForm(forms.ModelForm):

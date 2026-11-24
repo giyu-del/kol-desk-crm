@@ -22,8 +22,8 @@ from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
 from django import forms
 
-from .forms import ContentForm, CreatorForm, DealForm, PaymentForm, QuoteForm, ScheduleForm, StatsForm
-from .models import (Activity, AssignmentRequest, Audit, BLOCKERS, Blocker, Config, Creator,
+from .forms import CampaignForm, ContentForm, CreatorForm, DealForm, PaymentForm, QuoteForm, ScheduleForm, StatsForm
+from .models import (Activity, AssignmentRequest, Audit, BLOCKERS, Blocker, Campaign, Config, Creator,
                      Deal, GroupDelivery, LoginThrottle, Member, OUTCOMES, Payment, Profile, Quote, Report, Schedule, Shift)
 from .services import (COMPLETED_CONTACTS, REPLIES, audit, audience_check, band, costs, costs_bdt,
                        creators_for, group_report, phone_number, publish_due, report_data, role,
@@ -421,6 +421,50 @@ def deals(request):
             pass
     rows.sort(key=lambda r: (r[1] is None, -(r[1] or 0), r[0].pk))
     return page(request, "Confirmed rate card & deals", deals=Paginator(rows, 50).get_page(request.GET.get("page")))
+
+@login_required
+def campaigns(request):
+    rows = Campaign.objects.prefetch_related("deals__quote", "deals__payments").order_by("-created")
+    return page(request, "Campaigns", campaigns=rows, can_create=role(request.user) in EDIT)
+
+@login_required
+def campaign(request, pk):
+    obj = get_object_or_404(Campaign.objects.prefetch_related("deals__quote__profile__creator", "deals__payments"), pk=pk)
+    unassigned = deal_query(request).filter(campaign__isnull=True)
+    return page(request, str(obj), campaign=obj, unassigned=unassigned, can_edit=role(request.user) in EDIT)
+
+@login_required
+def campaign_create(request):
+    allowed(request, EDIT)
+    def save(form):
+        obj = form.save(commit=False)
+        obj.created_by = request.user
+        obj.save()
+        audit(request.user, "Created campaign", obj.pk)
+        return redirect("campaign", pk=obj.pk)
+    return form_page(request, "New campaign", CampaignForm(request.POST if request.method == "POST" else None), save)
+
+@login_required
+@require_POST
+def campaign_add_deal(request, pk):
+    allowed(request, EDIT)
+    obj = get_object_or_404(Campaign, pk=pk)
+    deal = get_object_or_404(deal_query(request), pk=request.POST.get("deal"), campaign__isnull=True)
+    deal.campaign = obj
+    deal.save(update_fields=["campaign"])
+    audit(request.user, "Added deal to campaign", deal.pk, campaign=str(obj))
+    return redirect("campaign", pk=pk)
+
+@login_required
+@require_POST
+def campaign_remove_deal(request, pk, deal_pk):
+    allowed(request, EDIT)
+    obj = get_object_or_404(Campaign, pk=pk)
+    deal = get_object_or_404(deal_query(request), pk=deal_pk, campaign=obj)
+    deal.campaign = None
+    deal.save(update_fields=["campaign"])
+    audit(request.user, "Removed deal from campaign", deal.pk, campaign=str(obj))
+    return redirect("campaign", pk=pk)
 
 @login_required
 def deal(request, pk):

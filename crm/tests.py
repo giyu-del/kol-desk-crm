@@ -13,7 +13,7 @@ from django.utils import timezone
 from openpyxl import Workbook
 
 from .imports import commit_batch, create_preview, reverse_batch
-from .models import Activity, AssignmentRequest, Blocker, Creator, Deal, GroupDelivery, Member, Payment, Profile, Quote, Report, Shift
+from .models import Activity, AssignmentRequest, Blocker, Campaign, Creator, Deal, GroupDelivery, Member, Payment, Profile, Quote, Report, Shift
 from .services import audience_check, costs, costs_bdt, score_rows, social_url
 
 User = get_user_model()
@@ -267,6 +267,61 @@ class CRMTests(TestCase):
         withdrawn = Deal.objects.get()
         self.assertFalse(withdrawn.content_confirmed)
         self.assertEqual(withdrawn.post_url, "https://facebook.com/example/post")
+
+    def test_campaigns_budget_rollup(self):
+        self.client.force_login(self.finance)
+        self.assertEqual(self.post("campaign_create", {"name": "Eid Sale", "budget": "20000"}).status_code, 403)
+        self.client.force_login(self.staff)
+        self.post("campaign_create", {"name": "Eid Sale", "budget": "20000"})
+        c = Campaign.objects.get()
+        self.assertContains(self.get("campaigns"), "Eid Sale")
+        self.post("quick_add", {"url": "https://facebook.com/example", "name": "উদাহরণ"})
+        p = Profile.objects.get()
+        self.post("add_quote", {"kind": "Creator quote", "amount": "6220", "currency": "BDT",
+                                "format": "Reels", "basis": "Package", "reels": 2}, p.pk)
+        q = Quote.objects.get(kind="Creator quote")
+        self.post("add_deal", {"campaign": str(c.pk)}, q.pk)
+        deal = Deal.objects.get()
+        self.assertEqual(deal.campaign, c)
+        self.client.force_login(self.manager)
+        self.post("deal_state", {"state": "Confirmed / Upcoming"}, deal.pk)
+        self.post("add_quote", {"kind": "Counteroffer", "amount": "100", "currency": "RM",
+                                "format": "Reels", "basis": "Per Reel"}, p.pk)
+        q2 = Quote.objects.get(kind="Counteroffer")
+        self.post("add_deal", {}, q2.pk)
+        deal2 = Deal.objects.get(quote=q2)
+        self.assertIsNone(deal2.campaign)
+        self.post("campaign_add_deal", {"deal": str(deal2.pk)}, c.pk)
+        self.assertEqual(Deal.objects.get(pk=deal2.pk).campaign, c)
+        self.post("deal_state", {"state": "Confirmed / Upcoming"}, deal2.pk)
+        # Pay 3000 of the BDT deal: request, confirm content, approve, record paid.
+        self.client.force_login(self.staff)
+        self.post("request_payment", {"amount": "3000", "token": uuid.uuid4()}, deal.pk)
+        self.post("deal_content", {"planned_publish": "2026-11-25", "published_at": "2026-11-25",
+                                   "post_url": "https://facebook.com/example/post", "action": "confirm"}, deal.pk)
+        self.client.force_login(self.finance)
+        pmt = Payment.objects.get(deal=deal)
+        self.post("payment_state", {"state": "Approved"}, pmt.pk)
+        self.post("payment_state", {"state": "Paid", "method": "bKash", "reference": "TX1"}, pmt.pk)
+        c.refresh_from_db()
+        self.assertEqual((c.committed, c.paid_bdt, c.remaining),
+                         (Decimal("9330"), Decimal("3000"), Decimal("10670")))
+        self.assertContains(self.get("campaign", c.pk), "9330.00")
+        self.assertContains(self.get("deal", deal.pk), "Eid Sale")
+        # A pending deal and a declined deal do not count as committed.
+        self.client.force_login(self.manager)
+        self.post("add_quote", {"kind": "Creator quote", "amount": "5000", "currency": "BDT",
+                                "format": "Reels", "basis": "Per Reel"}, p.pk)
+        q3 = Quote.objects.exclude(pk__in=(q.pk, q2.pk)).get()
+        self.post("add_deal", {"campaign": str(c.pk)}, q3.pk)
+        deal3 = Deal.objects.get(quote=q3)
+        self.assertEqual(Campaign.objects.get().committed, Decimal("9330"))
+        self.post("deal_state", {"state": "Declined"}, deal3.pk)
+        self.assertEqual(Campaign.objects.get().committed, Decimal("9330"))
+        # Removing the RM deal drops it from the rollup.
+        self.post("campaign_remove_deal", {}, c.pk, deal2.pk)
+        self.assertIsNone(Deal.objects.get(pk=deal2.pk).campaign)
+        self.assertEqual(Campaign.objects.get().committed, Decimal("6220"))
 
     def test_stage_change_creates_followup(self):
         self.post("quick_add", {"url": "https://facebook.com/example", "name": "উদাহরণ"})
